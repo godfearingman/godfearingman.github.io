@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto">
+
+<head><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta name="robots" content="index, follow">
+<title>Restrict the creation of threads | dx9</title>
+<meta name="keywords" content="">
+<meta name="description" content="A blog about how you can restrict the use of NtCreateThreadEx">
+<meta name="author" content="dx9">
+<link rel="canonical" href="https://dx9.uk/posts/ntcreatethreadex/">
+<link crossorigin="anonymous" href="/assets/css/stylesheet.5c25c975546c048d1a5600aadb48425ae1bc921a9a18fe67d6955c9535260811.css" integrity="sha256-XCXJdVRsBI0aVgCq20hCWuG8khqaGP5n1pVclTUmCBE=" rel="preload stylesheet" as="style">
+<script defer crossorigin="anonymous" src="/assets/js/highlight.acb54fd32bbc1982428b8850317e45d076b95012730a5936667e6bc21777692a.js" integrity="sha256-rLVP0yu8GYJCi4hQMX5F0Ha5UBJzClk2Zn5rwhd3aSo="
+    onload="hljs.initHighlightingOnLoad();"></script>
+<link rel="icon" href="https://dx9.uk/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="https://dx9.uk/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="https://dx9.uk/favicon-32x32.png">
+<link rel="apple-touch-icon" href="https://dx9.uk/apple-touch-icon.png">
+<link rel="mask-icon" href="https://dx9.uk/safari-pinned-tab.svg">
+<meta name="theme-color" content="#2e2e33">
+<meta name="msapplication-TileColor" content="#2e2e33">
+<noscript>
+    <style>
+        #theme-toggle,
+        .top-link {
+            display: none;
+        }
+
+    </style>
+    <style>
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --theme: rgb(29, 30, 32);
+                --entry: rgb(46, 46, 51);
+                --primary: rgb(218, 218, 219);
+                --secondary: rgb(155, 156, 157);
+                --tertiary: rgb(65, 66, 68);
+                --content: rgb(196, 196, 197);
+                --hljs-bg: rgb(46, 46, 51);
+                --code-bg: rgb(55, 56, 62);
+                --border: rgb(51, 51, 51);
+            }
+
+            .list {
+                background: var(--theme);
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-track {
+                background: 0 0;
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-thumb {
+                border-color: var(--theme);
+            }
+        }
+
+    </style>
+</noscript><meta property="og:title" content="Restrict the creation of threads" />
+<meta property="og:description" content="A blog about how you can restrict the use of NtCreateThreadEx" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://dx9.uk/posts/ntcreatethreadex/" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2023-10-29T16:45:04+00:00" />
+<meta property="article:modified_time" content="2023-10-29T16:45:04+00:00" />
+
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="Restrict the creation of threads"/>
+<meta name="twitter:description" content="A blog about how you can restrict the use of NtCreateThreadEx"/>
+
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [, 
+    {
+      "@type": "ListItem",
+      "position":  2 ,
+      "name": "Posts",
+      "item": "https://dx9.uk/posts/"
+    }, 
+    {
+      "@type": "ListItem",
+      "position":  3 ,
+      "name": "Restrict the creation of threads",
+      "item": "https://dx9.uk/posts/ntcreatethreadex/"
+    }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Restrict the creation of threads",
+  "name": "Restrict the creation of threads",
+  "description": "A blog about how you can restrict the use of NtCreateThreadEx",
+  "keywords": [
+    
+  ],
+  "articleBody": "Chapters Introduction Theory behind this Hijacking a Thread POC Why RAX? Conclusion Introduction So, in this short blog - we’ll be discussing how you could restrict the creation of threads to a certain extent by using a simple trick. As we know, all thread creation, essentially, goes through NtCreateThreadEx. This means when you invoke; CreateThread, CreateRemoteThread, etc, you’re going through NtCreateThreadEx behind the scenes. This makes it easy for us, who want to prevent people from creating threads because we don’t have to worry about doing this trick on multiple functions. This goes hand in hand with having whitelisted areas where you should be able to create your threads but you should do this under situations where you’re confident because if someone malicious finds out where you’re creating your legitimate threads, what stops them from creating their threads there too?\nTheory behind this Okay so now that we’ve spoken a little on how it works, let’s talk about exactly what we’ll be doing. Since all threads created go through NtCreateThreadEx what we’ll be doing is placing a debug breakpoint within NtCreateThreadEx at the start of the application. This means anyone trying to create a thread before we have even started up will get caught in our custom VEH Handler as trying to create a thread will throw EXCEPTION_BREAKPOINT. Once in our VEH Handler, we have full power over the user. We can start by checking the RAX and if it points to an illegitimate module or area of memory where nobody should be calling CreateThread from we can safely denounce that this is a malicious user as all our thread calls would be from areas of memory that we call whitelisted areas.\nHijacking a Thread After all this, the malicious user might think instead of creating a thread - let’s hijack one. This is no better for them, while we can’t exactly use our NtCreateThreadEx method here - we can incorporate a new one. We can stack walk the list of addresses that the thread has gone through, if one of the addresses suddenly seems out of place we can subject it to the same theory of our VEH Handler, check the RAX, and see if it is creating a thread to an illegitimate area of memory by a numerous amounts of checks on the actual allocation itself as well as the typical whitelisted area check.\nPOC Here’s a proof of concept I have written which will check if the function where CreateThread is being called onto is in a valid module. Of course the check I have is not extensive and you can definitely improve it heavily with just a little more time. I just wrote this in a short amount of time for the sole purpose of showing you how this could work in detecting and preventing thread creation.\nnamespace nt_handler { class nt_create_thread_ex : public memory::c_memory { private: byte orig_bytes[7]; PVOID nt_create_thread_ex_addr; public: nt_create_thread_ex() { // Initialise address nt_create_thread_ex_addr = reinterpret_cast\u003cPVOID\u003e(GetProcAddress(GetModuleHandleA(\"ntdll.dll\"), \"NtCreateThreadEx\")); // Store original bytes memcpy(orig_bytes, nt_create_thread_ex_addr, 7); } // Return original bytes byte* get_original_bytes(); // Place debug breakpoints void place_debug_breakpoints(); // Place back original bytes void place_original_bytes(); }; void nt_create_thread_ex::place_debug_breakpoints() { // Set old protection DWORD old_protection; // Change protection so we can edit the memory VirtualProtect(this-\u003ent_create_thread_ex_addr, 7, PAGE_EXECUTE_READWRITE, \u0026old_protection); // Set 7 bytes to int 3's memset(this-\u003ent_create_thread_ex_addr, 0xCC, 7); // Restore page protection VirtualProtect(this-\u003ent_create_thread_ex_addr, 7, old_protection, NULL); } void nt_create_thread_ex::place_original_bytes() { // Set old protection DWORD old_protection; // Change protection so we can edit the memory VirtualProtect(this-\u003ent_create_thread_ex_addr, 7, PAGE_EXECUTE_READWRITE, \u0026old_protection); // Set 7 bytes to original bytes memcpy(this-\u003ent_create_thread_ex_addr, this-\u003eorig_bytes, 7); // Restore page protection VirtualProtect(this-\u003ent_create_thread_ex_addr, 7, old_protection, NULL); } // Helper func for non class variables byte* nt_create_thread_ex::get_original_bytes() { return this-\u003eorig_bytes; }; extern nt_handler::nt_create_thread_ex* nt_handler = nullptr; } This class extends my basic memory class I just use to have some checks on RAX, RIP, etc. This class can be easily replicated to the developers preference.\nNow, let’s check the VEH handler out\nLONG WINAPI nt_veh_handler(struct _EXCEPTION_POINTERS* exception_info) { if (exception_info-\u003eExceptionRecord-\u003eExceptionCode == EXCEPTION_BREAKPOINT) { #ifdef debug_prints std::cout \u003c\u003c \"Exception\" \u003c\u003c '\\n'; #endif if (!nt_handler::nt_handler-\u003eis_valid_rax(exception_info-\u003eContextRecord-\u003eRax)) { #ifdef debug_prints std::cout \u003c\u003c \"Invalid RAX\" \u003c\u003c '\\n'; #endif\treturn EXCEPTION_CONTINUE_SEARCH; // Force crash the malicious user } else { #ifdef debug_prints std::cout \u003c\u003c \"Valid RAX, restoring bytes\" \u003c\u003c '\\n'; #endif\tnt_handler::nt_handler-\u003eplace_original_bytes(); return EXCEPTION_CONTINUE_EXECUTION; } } return EXCEPTION_CONTINUE_SEARCH; } As you can see, after validating RAX we restore the original bytes and continue with execution so that the user does not crash as (s)he is not malicious. \\\nThis image refers to the creation of the thread initially going through the VEH handler After being confirmed as a legit call, it’ll create the thread Why RAX? The reason why we’re checking RAX is fairly simple, in this case RAX holds the address of the function which is having a thread created for. Conclusion In conclusion, this was a really short blog detailing a method that can potentially be used and paired well with other anti-cheat technology to safely stop any vulnerabilities in creating threads. It’s not a typical method for cheaters to create threads but if they’re faced with the possibility of doing so without being caught, they most likely will. A lot of them go with the second option of hijacking a thread or maybe even hooking but both are just as detectable as the other.\n",
+  "wordCount" : "888",
+  "inLanguage": "en",
+  "datePublished": "2023-10-29T16:45:04Z",
+  "dateModified": "2023-10-29T16:45:04Z",
+  "author":{
+    "@type": "Person",
+    "name": "dx9"
+  },
+  "mainEntityOfPage": {
+    "@type": "WebPage",
+    "@id": "https://dx9.uk/posts/ntcreatethreadex/"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "dx9",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://dx9.uk/favicon.ico"
+    }
+  }
+}
+</script>
+</head>
+
+<body class="" id="top">
+<script>
+    if (localStorage.getItem("pref-theme") === "dark") {
+        document.body.classList.add('dark');
+    } else if (localStorage.getItem("pref-theme") === "light") {
+        document.body.classList.remove('dark')
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.classList.add('dark');
+    }
+
+</script>
+
+<header class="header">
+    <nav class="nav">
+        <div class="logo">
+            <a href="https://dx9.uk" accesskey="h" title="dx9 (Alt + H)">dx9</a>
+            <div class="logo-switches">
+                <button id="theme-toggle" accesskey="t" title="(Alt + T)">
+                    <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <ul id="menu">
+        </ul>
+    </nav>
+</header>
+<main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    
+    <h1 class="post-title">
+      Restrict the creation of threads
+    </h1>
+    <div class="post-meta"><span title='2023-10-29 16:45:04 +0000 UTC'>October 29, 2023</span>&nbsp;·&nbsp;5 min&nbsp;·&nbsp;888 words&nbsp;·&nbsp;dx9
+
+</div>
+  </header> 
+  <div class="post-content"><h3 id="chapters">Chapters<a hidden class="anchor" aria-hidden="true" href="#chapters">#</a></h3>
+<ol start="0">
+<li><a href="#introduction">Introduction</a></li>
+<li><a href="#theory-behind-this">Theory behind this</a></li>
+<li><a href="#hijacking-a-thread">Hijacking a Thread</a></li>
+<li><a href="#poc">POC</a></li>
+<li><a href="#why-rax">Why RAX?</a></li>
+<li><a href="#conclusion">Conclusion</a></li>
+</ol>
+<h3 id="introduction">Introduction<a hidden class="anchor" aria-hidden="true" href="#introduction">#</a></h3>
+<p>So, in this short blog - we&rsquo;ll be discussing how you could restrict the creation of threads to a certain extent by using a simple trick. As we know, all thread creation, essentially, goes through NtCreateThreadEx. This means when you invoke; CreateThread, CreateRemoteThread, etc, you&rsquo;re going through NtCreateThreadEx behind the scenes. This makes it easy for us, who want to prevent people from creating threads because we don&rsquo;t have to worry about doing this trick on multiple functions. This goes hand in hand with having whitelisted areas where you should be able to create your threads but you should do this under situations where you&rsquo;re confident because if someone malicious finds out where you&rsquo;re creating your legitimate threads, what stops them from creating their threads there too?</p>
+<h3 id="theory-behind-this">Theory behind this<a hidden class="anchor" aria-hidden="true" href="#theory-behind-this">#</a></h3>
+<p>Okay so now that we&rsquo;ve spoken a little on how it works, let&rsquo;s talk about exactly what we&rsquo;ll be doing. Since all threads created go through NtCreateThreadEx what we&rsquo;ll be doing is placing a debug breakpoint within NtCreateThreadEx at the start of the application. This means anyone trying to create a thread before we <em>have even started up</em> will get caught in our custom VEH Handler as trying to create a thread will throw EXCEPTION_BREAKPOINT. Once in our VEH Handler, we have full power over the user. We can start by checking the RAX and if it points to an illegitimate module or area of memory where nobody should be calling CreateThread from we can safely denounce that this is a malicious user as all our thread calls would be from areas of memory that we call whitelisted areas.</p>
+<h3 id="hijacking-a-thread">Hijacking a Thread<a hidden class="anchor" aria-hidden="true" href="#hijacking-a-thread">#</a></h3>
+<p>After all this, the malicious user might think instead of creating a thread - let&rsquo;s hijack one. This is no better for them, while we can&rsquo;t exactly use our NtCreateThreadEx method here - we can incorporate a new one. We can stack walk the list of addresses that the thread has gone through, if one of the addresses suddenly seems out of place we can subject it to the same theory of our VEH Handler, check the RAX, and see if it is creating a thread to an illegitimate area of memory by a numerous amounts of checks on the actual allocation itself as well as the typical whitelisted area check.</p>
+<h3 id="poc">POC<a hidden class="anchor" aria-hidden="true" href="#poc">#</a></h3>
+<p>Here&rsquo;s a proof of concept I have written which will check if the function where CreateThread is being called onto is in a valid module. Of course the check I have is not extensive and you can definitely improve it heavily with just a little more time. I just wrote this in a short amount of time for the sole purpose of showing you how this could work in detecting and preventing thread creation.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-c++" data-lang="c++"><span style="display:flex;"><span><span style="color:#66d9ef">namespace</span> nt_handler {
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">class</span> <span style="color:#a6e22e">nt_create_thread_ex</span> <span style="color:#f92672">:</span> <span style="color:#66d9ef">public</span> memory<span style="color:#f92672">::</span>c_memory {
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">private</span><span style="color:#f92672">:</span>
+</span></span><span style="display:flex;"><span>		byte orig_bytes[<span style="color:#ae81ff">7</span>];
+</span></span><span style="display:flex;"><span>		PVOID nt_create_thread_ex_addr;
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">public</span><span style="color:#f92672">:</span>
+</span></span><span style="display:flex;"><span>		nt_create_thread_ex() {
+</span></span><span style="display:flex;"><span>			<span style="color:#75715e">// Initialise address
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>			nt_create_thread_ex_addr <span style="color:#f92672">=</span> <span style="color:#66d9ef">reinterpret_cast</span><span style="color:#f92672">&lt;</span>PVOID<span style="color:#f92672">&gt;</span>(GetProcAddress(GetModuleHandleA(<span style="color:#e6db74">&#34;ntdll.dll&#34;</span>), <span style="color:#e6db74">&#34;NtCreateThreadEx&#34;</span>));
+</span></span><span style="display:flex;"><span>			<span style="color:#75715e">// Store original bytes
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>			memcpy(orig_bytes, nt_create_thread_ex_addr, <span style="color:#ae81ff">7</span>);
+</span></span><span style="display:flex;"><span>		}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Return original bytes
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		byte<span style="color:#f92672">*</span> <span style="color:#a6e22e">get_original_bytes</span>();
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Place debug breakpoints
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		<span style="color:#66d9ef">void</span> <span style="color:#a6e22e">place_debug_breakpoints</span>();
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Place back original bytes
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		<span style="color:#66d9ef">void</span> <span style="color:#a6e22e">place_original_bytes</span>();
+</span></span><span style="display:flex;"><span>	};
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">void</span> nt_create_thread_ex<span style="color:#f92672">::</span>place_debug_breakpoints() {
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Set old protection
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		DWORD old_protection;
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Change protection so we can edit the memory
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		VirtualProtect(<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>nt_create_thread_ex_addr, <span style="color:#ae81ff">7</span>, PAGE_EXECUTE_READWRITE, <span style="color:#f92672">&amp;</span>old_protection);
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Set 7 bytes to int 3&#39;s
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		memset(<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>nt_create_thread_ex_addr, <span style="color:#ae81ff">0xCC</span>, <span style="color:#ae81ff">7</span>);
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Restore page protection
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		VirtualProtect(<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>nt_create_thread_ex_addr, <span style="color:#ae81ff">7</span>, old_protection, NULL);
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">void</span> nt_create_thread_ex<span style="color:#f92672">::</span>place_original_bytes() {
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Set old protection
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		DWORD old_protection;
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Change protection so we can edit the memory
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		VirtualProtect(<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>nt_create_thread_ex_addr, <span style="color:#ae81ff">7</span>, PAGE_EXECUTE_READWRITE, <span style="color:#f92672">&amp;</span>old_protection);
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Set 7 bytes to original bytes
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		memcpy(<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>nt_create_thread_ex_addr, <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>orig_bytes, <span style="color:#ae81ff">7</span>);
+</span></span><span style="display:flex;"><span>		<span style="color:#75715e">// Restore page protection
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		VirtualProtect(<span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>nt_create_thread_ex_addr, <span style="color:#ae81ff">7</span>, old_protection, NULL);
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#75715e">// Helper func for non class variables
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>	byte<span style="color:#f92672">*</span> nt_create_thread_ex<span style="color:#f92672">::</span>get_original_bytes() { <span style="color:#66d9ef">return</span> <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>orig_bytes; };
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">extern</span> nt_handler<span style="color:#f92672">::</span>nt_create_thread_ex<span style="color:#f92672">*</span> nt_handler <span style="color:#f92672">=</span> <span style="color:#66d9ef">nullptr</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>This class extends my basic memory class I just use to have some checks on RAX, RIP, etc. This class can be easily replicated to the developers preference.</p>
+<p>Now, let&rsquo;s check the VEH handler out</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-c++" data-lang="c++"><span style="display:flex;"><span>LONG WINAPI <span style="color:#a6e22e">nt_veh_handler</span>(<span style="color:#66d9ef">struct</span> <span style="color:#a6e22e">_EXCEPTION_POINTERS</span><span style="color:#f92672">*</span> exception_info) {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (exception_info<span style="color:#f92672">-&gt;</span>ExceptionRecord<span style="color:#f92672">-&gt;</span>ExceptionCode <span style="color:#f92672">==</span> EXCEPTION_BREAKPOINT) {
+</span></span><span style="display:flex;"><span><span style="color:#75715e">#ifdef debug_prints
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>        std<span style="color:#f92672">::</span>cout <span style="color:#f92672">&lt;&lt;</span> <span style="color:#e6db74">&#34;Exception&#34;</span> <span style="color:#f92672">&lt;&lt;</span> <span style="color:#e6db74">&#39;\n&#39;</span>;
+</span></span><span style="display:flex;"><span><span style="color:#75715e">#endif
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>nt_handler<span style="color:#f92672">::</span>nt_handler<span style="color:#f92672">-&gt;</span>is_valid_rax(exception_info<span style="color:#f92672">-&gt;</span>ContextRecord<span style="color:#f92672">-&gt;</span>Rax)) {
+</span></span><span style="display:flex;"><span><span style="color:#75715e">#ifdef debug_prints
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>            std<span style="color:#f92672">::</span>cout <span style="color:#f92672">&lt;&lt;</span> <span style="color:#e6db74">&#34;Invalid RAX&#34;</span> <span style="color:#f92672">&lt;&lt;</span> <span style="color:#e6db74">&#39;\n&#39;</span>;
+</span></span><span style="display:flex;"><span><span style="color:#75715e">#endif	
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>            <span style="color:#66d9ef">return</span> EXCEPTION_CONTINUE_SEARCH; <span style="color:#75715e">// Force crash the malicious user
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>        }
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">else</span> {
+</span></span><span style="display:flex;"><span><span style="color:#75715e">#ifdef debug_prints
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>            std<span style="color:#f92672">::</span>cout <span style="color:#f92672">&lt;&lt;</span> <span style="color:#e6db74">&#34;Valid RAX, restoring bytes&#34;</span> <span style="color:#f92672">&lt;&lt;</span> <span style="color:#e6db74">&#39;\n&#39;</span>;
+</span></span><span style="display:flex;"><span><span style="color:#75715e">#endif	
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>            nt_handler<span style="color:#f92672">::</span>nt_handler<span style="color:#f92672">-&gt;</span>place_original_bytes();
+</span></span><span style="display:flex;"><span>            <span style="color:#66d9ef">return</span> EXCEPTION_CONTINUE_EXECUTION;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">return</span> EXCEPTION_CONTINUE_SEARCH;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>As you can see, after validating RAX we restore the original bytes and continue with execution so that the user does not crash as (s)he is not malicious. \</p>
+<h5 id="this-image-refers-to-the-creation-of-the-thread-initially-going-through-the-veh-handler">This image refers to the creation of the thread initially going through the VEH handler<a hidden class="anchor" aria-hidden="true" href="#this-image-refers-to-the-creation-of-the-thread-initially-going-through-the-veh-handler">#</a></h5>
+<p><img loading="lazy" src="/img/before_thread_created.png" alt=""  />
+</p>
+<h5 id="after-being-confirmed-as-a-legit-call-itll-create-the-thread">After being confirmed as a legit call, it&rsquo;ll create the thread<a hidden class="anchor" aria-hidden="true" href="#after-being-confirmed-as-a-legit-call-itll-create-the-thread">#</a></h5>
+<p><img loading="lazy" src="/img/thread_created.png" alt=""  />
+</p>
+<h3 id="why-rax">Why RAX?<a hidden class="anchor" aria-hidden="true" href="#why-rax">#</a></h3>
+<p>The reason why we&rsquo;re checking RAX is fairly simple, in this case RAX holds the address of the function which is having a thread created for.
+<img loading="lazy" src="/img/rax.png" alt=""  />
+</p>
+<h3 id="conclusion">Conclusion<a hidden class="anchor" aria-hidden="true" href="#conclusion">#</a></h3>
+<p>In conclusion, this was a really short blog detailing a method that can potentially be used and paired well with other anti-cheat technology to safely stop any vulnerabilities in creating threads. It&rsquo;s not a typical method for cheaters to create threads but if they&rsquo;re faced with the possibility of doing so without being caught, they most likely will. A lot of them go with the second option of hijacking a thread or maybe even hooking but both are just as detectable as the other.</p>
+
+
+  </div>
+
+  <footer class="post-footer">
+    <ul class="post-tags">
+    </ul>
+  </footer>
+</article>
+    </main>
+    
+<footer class="footer">
+    <span>&copy; 2023 <a href="https://dx9.uk">dx9</a></span>
+    <span>
+        Powered by
+        <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
+        <a href="https://github.com/adityatelange/hugo-PaperMod/" rel="noopener" target="_blank">PaperMod</a>
+    </span>
+</footer>
+<a href="#top" aria-label="go to top" title="Go to Top (Alt + G)" class="top-link" id="top-link" accesskey="g">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentColor">
+        <path d="M12 6H0l6-6z" />
+    </svg>
+</a>
+
+<script>
+    let menu = document.getElementById('menu')
+    if (menu) {
+        menu.scrollLeft = localStorage.getItem("menu-scroll-position");
+        menu.onscroll = function () {
+            localStorage.setItem("menu-scroll-position", menu.scrollLeft);
+        }
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+            var id = this.getAttribute("href").substr(1);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({
+                    behavior: "smooth"
+                });
+            } else {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();
+            }
+            if (id === "top") {
+                history.replaceState(null, null, " ");
+            } else {
+                history.pushState(null, null, `#${id}`);
+            }
+        });
+    });
+
+</script>
+<script>
+    var mybutton = document.getElementById("top-link");
+    window.onscroll = function () {
+        if (document.body.scrollTop > 800 || document.documentElement.scrollTop > 800) {
+            mybutton.style.visibility = "visible";
+            mybutton.style.opacity = "1";
+        } else {
+            mybutton.style.visibility = "hidden";
+            mybutton.style.opacity = "0";
+        }
+    };
+
+</script>
+<script>
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+        if (document.body.className.includes("dark")) {
+            document.body.classList.remove('dark');
+            localStorage.setItem("pref-theme", 'light');
+        } else {
+            document.body.classList.add('dark');
+            localStorage.setItem("pref-theme", 'dark');
+        }
+    })
+
+</script>
+</body>
+
+</html>
