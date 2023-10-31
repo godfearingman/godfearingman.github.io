@@ -8,6 +8,15 @@
     <language>en-us</language>
     <lastBuildDate>Sun, 29 Oct 2023 16:45:04 +0000</lastBuildDate><atom:link href="https://dx9.uk/index.xml" rel="self" type="application/rss+xml" />
     <item>
+      <title>Checking HandleCount to prevent Unauthorised Code injection</title>
+      <link>https://dx9.uk/posts/wow-reversal-copy/</link>
+      <pubDate>Sun, 29 Oct 2023 16:45:04 +0000</pubDate>
+      
+      <guid>https://dx9.uk/posts/wow-reversal-copy/</guid>
+      <description>A blog to detail how we can use NtQueryInformationProcess to check Code injection before the game has initialised</description>
+    </item>
+    
+    <item>
       <title>Restrict the creation of threads</title>
       <link>https://dx9.uk/posts/ntcreatethreadex/</link>
       <pubDate>Sun, 29 Oct 2023 16:45:04 +0000</pubDate>
