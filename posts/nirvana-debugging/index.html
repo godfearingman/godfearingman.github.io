@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto">
+
+<head><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta name="robots" content="index, follow">
+<title>Nirvana Debugging | dx9</title>
+<meta name="keywords" content="">
+<meta name="description" content="Using the Nirvana Debugging method in order to monitor syscalls from usermode">
+<meta name="author" content="dx9">
+<link rel="canonical" href="https://dx9.uk/posts/nirvana-debugging/">
+<link crossorigin="anonymous" href="/assets/css/stylesheet.5c25c975546c048d1a5600aadb48425ae1bc921a9a18fe67d6955c9535260811.css" integrity="sha256-XCXJdVRsBI0aVgCq20hCWuG8khqaGP5n1pVclTUmCBE=" rel="preload stylesheet" as="style">
+<script defer crossorigin="anonymous" src="/assets/js/highlight.acb54fd32bbc1982428b8850317e45d076b95012730a5936667e6bc21777692a.js" integrity="sha256-rLVP0yu8GYJCi4hQMX5F0Ha5UBJzClk2Zn5rwhd3aSo="
+    onload="hljs.initHighlightingOnLoad();"></script>
+<link rel="icon" href="https://dx9.uk/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="https://dx9.uk/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="https://dx9.uk/favicon-32x32.png">
+<link rel="apple-touch-icon" href="https://dx9.uk/apple-touch-icon.png">
+<link rel="mask-icon" href="https://dx9.uk/safari-pinned-tab.svg">
+<meta name="theme-color" content="#2e2e33">
+<meta name="msapplication-TileColor" content="#2e2e33">
+<noscript>
+    <style>
+        #theme-toggle,
+        .top-link {
+            display: none;
+        }
+
+    </style>
+    <style>
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --theme: rgb(29, 30, 32);
+                --entry: rgb(46, 46, 51);
+                --primary: rgb(218, 218, 219);
+                --secondary: rgb(155, 156, 157);
+                --tertiary: rgb(65, 66, 68);
+                --content: rgb(196, 196, 197);
+                --hljs-bg: rgb(46, 46, 51);
+                --code-bg: rgb(55, 56, 62);
+                --border: rgb(51, 51, 51);
+            }
+
+            .list {
+                background: var(--theme);
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-track {
+                background: 0 0;
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-thumb {
+                border-color: var(--theme);
+            }
+        }
+
+    </style>
+</noscript><meta property="og:title" content="Nirvana Debugging" />
+<meta property="og:description" content="Using the Nirvana Debugging method in order to monitor syscalls from usermode" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://dx9.uk/posts/nirvana-debugging/" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2023-11-01T21:53:54+00:00" />
+<meta property="article:modified_time" content="2023-11-01T21:53:54+00:00" />
+
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="Nirvana Debugging"/>
+<meta name="twitter:description" content="Using the Nirvana Debugging method in order to monitor syscalls from usermode"/>
+
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [, 
+    {
+      "@type": "ListItem",
+      "position":  2 ,
+      "name": "Posts",
+      "item": "https://dx9.uk/posts/"
+    }, 
+    {
+      "@type": "ListItem",
+      "position":  3 ,
+      "name": "Nirvana Debugging",
+      "item": "https://dx9.uk/posts/nirvana-debugging/"
+    }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Nirvana Debugging",
+  "name": "Nirvana Debugging",
+  "description": "Using the Nirvana Debugging method in order to monitor syscalls from usermode",
+  "keywords": [
+    
+  ],
+  "articleBody": "Introduction Hello, welcome to my blog. Today I’ll be discussing how we can log, monitor and if wanted, spoof the return value of a syscall. Typically malicious developers will try to bypass hooks made on Nt functions by an anticheat developer by directly calling the function via a syscall. The way this method works is by setting up a callback which is invoked directly after the kernel gets back to user-mode. By setting this up we can actually log almost all syscalls. This is really beneficial paired with a handful of well-written sanity checks. The reason I say this is because, alone, the callback will merely log, almost, ALL syscalls whether they’re legit or illegitimate all rely on the developer’s sanity checks. I’ll go into more detail in the next chapters about all of this information as well as more.\nSyscalls In Windows, all WinAPI functions go through a call stack similar to this our_application.exe-\u003ekernel32.dll-\u003ekernalbase.dll-\u003entdll.dll-\u003esyscall_invoked-\u003ekernel mode. As you can see, by using syscalls are indirectly telling the kernel land to execute code. Here is a little homebrewed image. As you can see from this image, by directly calling a syscall - malicious developers can basically bypass any hook placed on any of the previous functions (which is a common practice). Now, let’s see how we can combat this by using the Nirvana Debugging method. This places a callback when the kernel tries to relay information back to the user application. Here’s an updated image that will show where the callback will essentially sit. From this image, we can now see that instead of directly reporting back to the user-mode application and continuing execution, we go through a custom callback which gets invoked every time a syscall is fired!\nNirvana Debugging Explained The way the Nirvana Debugging method works is by creating a hook that will call our callback with some parameters that we want to take a look into to create sanity checks to maintain the legitimacy of syscalls. The idea is useful to monitor direct syscalls which would otherwise be not possible in user mode. We use NtSetInformationProcess with the PROCESS_INFO_CLASS_INSTRUMENTATION (0x28 | 40) as the Process information class. We utilise an undocumented, but leaked, KPROCESS struct which is within kernel memory. Here’s how it looks.\ntypedef struct _PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION { ULONG Version; ULONG Reserved; PVOID Callback; } PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION, *PPROCESS_INSTRUMENTATION_CALLBACK_INFORMATION; The version field refers to the architecture of the process we’re installing the hook on. 1 = x86; 0 = x64. For our PoC we’ll be using x64. The reserved field is always 0. The callback field is a pointer to our assembly function which will call our hook. Setup To get started, we’ll need to make sure our Visual Studio project can compile our .asm file. For this, we’ll simply tick the masm field in the build customisations \u0026 create a .asm file. Once our assembly file exists we’ll need to think what we want to do to use this method to find malicious syscalls. Ideally, we want to get the syscall pointer \u0026 return address. We can use both of these for heuristics \u0026 actually see what function is even invoking syscall! This is important as we’ll see later for some sanity checks. To begin with, since we want to store a value we’re going to want to create an 8-byte value within our data section, and within our code section, we’re going to create a function that will save registers, align stack, pass the parameters we want, call our hook, restore them after we’re done and set rax to the value returned from our function.\nOur assembly function include ksamd64.inc EXTERN instrumentation_callback:proc ; our C function which is our actual hook .data return_val QWORD 0 .code instrumentation_callback_thunk proc ; save registers push rax push rcx push rbx push rbp push rdi push rsi push rsp sub rsp, 20h ; align stack mov rdx, rax mov rcx, r10 call instrumentation_callback ; call hook with rax \u0026 r10 mov QWORD PTR [return_val], rax ; set return value to what our function returned add rsp, 20h ; align stack ; restore registers pop rsp pop rsi pop rdi pop rbp pop rbx pop rcx pop rax ; set rax to what our function returned mov rax, QWORD PTR [return_val] ret instrumentation_callback_thunk endp end Understanding our assembly function We must understand how this works, as said before we’re simply preserving the registers, and after our hook is finished, we store the value returned from it and after restoring the registers to their original state we set rax to the value returned from our function. It’s not important to spoof the return value from the syscall. I’ve just added it in as a little bonus to show just how fascinating this entire project really is.\nCreating our hook This is the important part now, as you can see in the code;\nmov rdx, rax mov rcx, r10 call instrumentation_callback ; call hook with rax \u0026 r10 We need to create a function with two parameters being; r10 \u0026 rax. We’ll use the value within r10 to get the address of where the syscall was invoked and we’ll use rax to access what the function is returning, we can modify this or use it for an extra sanity check to combat malicious users attempting to spoof what syscall was actually called. Let’s begin with creating an empty function and setting up some really cheap anti-recursion methods to attempt to keep our hook thread safe.\nbool disable_recurs = false; unsigned __int64 instrumentation_callback(unsigned __int64 r10, unsigned __int64 rax) { if (!disable_recurs) { disable_recurs = true; // Checks written here disable_recurs = false; return rax; } return rax; } We’ll need to use extern “C” on both of our functions, the one we wrote in assembly and the one we wrote just above.\nextern \"C\" void instrumentation_callback_thunk(); extern \"C\" unsigned __int64 instrumentation_callback(unsigned __int64 r10, unsigned __int64 rax); Initialising our hook Now that we’ve created our hook, we’ll need to use NtSetInformationProcess to assign our hook. But just before that, let’s create the structure and fill in the fields accordingly.\nPROCESS_INSTRUMENTATION_CALLBACK_INFORMATION create_debugger() { PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION nirvana_debugger; nirvana_debugger.Reserved = 0; nirvana_debugger.Version = 0; // x64 nirvana_debugger.Callback = instrumentation_callback_thunk; // our assembly function return nirvana_debugger; } VOID enable_debugger(PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION nirvana_debugger) { NtSetInformationProcess(GetCurrentProcess(), PROCESS_INFO_CLASS_INSTRUMENTATION, \u0026nirvana_debugger, sizeof(nirvana_debugger)); } Just like that, if we were to have an output within our hook and we were to call any function really, you’d get a hit. This is because our hook is fully installed, after every syscall the kernel will interact with our callback before the original call.\nParsing information from the paramters Now that we are given r10 \u0026 rax, let’s actually put these parameters to use and get our information from them. As we remember, r10 will have information regarding the actual function that invoked the syscall. We’ll use SymFromAddr(…) to get symbol information from the address. While we’re at it, let’s write a simple function which’ll traverse the function bytes and extract the syscall. We can then use rax to output what the kernel returned and to top it off, we’ll use r10 to get the return address for some extra debugging.\nextract_syscall_from_fn uint16_t extract_syscall_from_fn(unsigned __int64 start_address) { unsigned __int64 curr_byte_addr = start_address; while (*reinterpret_cast\u003cbyte*\u003e(curr_byte_addr) != 0xC3) { if (*reinterpret_cast\u003cDWORD*\u003e(curr_byte_addr) == 0xb8d18b4c) { // mov r10, rcx return *reinterpret_cast\u003cbyte*\u003e(curr_byte_addr + 4); // mov eax, id } curr_byte_addr += 0x4; } return 0x0; } Our finished hook bool disable_recurs = false; unsigned __int64 instrumentation_callback(unsigned __int64 r10, unsigned __int64 rax) { if (!disable_recurs) { disable_recurs = true; CHAR buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME] = { 0 }; PSYMBOL_INFO pSymbol = (PSYMBOL_INFO)buffer; pSymbol-\u003eSizeOfStruct = sizeof(SYMBOL_INFO); pSymbol-\u003eMaxNameLen = MAX_SYM_NAME; DWORD64 Displacement; BOOLEAN result = SymFromAddr(GetCurrentProcess(), r10, \u0026Displacement, pSymbol); if (result) { printf(\"[+] Func Called: %s\\n[+] Syscall id : %x\\n[+] Func returned: 0x%I64X\\n[+] Func return address: 0x%I64X\\n[-] Setting return\\n\", pSymbol-\u003eName, syscalls::extract_syscall_from_fn(pSymbol-\u003eAddress), rax, r10); rax = 0xDEEC59;\t// Hehe, your return value is now dx9!\t} disable_recurs = false; return rax; } return rax; } Do note, spoofing the return value isn’t necessary. This PoC was merely to show that it’s possible.\nOur hook in action Now that our hook is finished just for the bare debugging we’ll do as of now, let’s directly invoke a syscall and see how our hook reacts. Congratulations, the manual syscall was logged and even the output was spoofed. Now that we can catch all syscalls we can create some sanity checks. These all depend on the developer but since we have the return address we can check if the invoked syscall was from an actual nt function or if it was directly invoked through inline assembly outside of the respective nt function, if it was through inline assembly that isn’t from an nt function we can assume it was a malicious user trying to avoid a possible check an anti-cheat developer has written for any of the nt functions. A simple check could literally be bool was_nt_func = (pSymbol-\u003eAddress == address_from_list_of_nt_functions);\nConclusion In conclusion, we can tell just how powerful registering an instrumentation callback really is. It has allowed us to monitor almost all syscalls, manual or not - they’ll get logged. I hope you learned something new from this blog, there are insane amounts of sanity checks you could create in paired with this to really monitor a large number of function calls within your application.\nReferences/Resources https://github.com/ionescu007/HookingNirvana/blob/master/Esoteric%20Hooks.pdf https://www.usenix.org/legacy/events/vee06/full_papers/p154-bhansali.pdf ",
+  "wordCount" : "1556",
+  "inLanguage": "en",
+  "datePublished": "2023-11-01T21:53:54Z",
+  "dateModified": "2023-11-01T21:53:54Z",
+  "author":{
+    "@type": "Person",
+    "name": "dx9"
+  },
+  "mainEntityOfPage": {
+    "@type": "WebPage",
+    "@id": "https://dx9.uk/posts/nirvana-debugging/"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "dx9",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://dx9.uk/favicon.ico"
+    }
+  }
+}
+</script>
+</head>
+
+<body class="" id="top">
+<script>
+    if (localStorage.getItem("pref-theme") === "dark") {
+        document.body.classList.add('dark');
+    } else if (localStorage.getItem("pref-theme") === "light") {
+        document.body.classList.remove('dark')
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.classList.add('dark');
+    }
+
+</script>
+
+<header class="header">
+    <nav class="nav">
+        <div class="logo">
+            <a href="https://dx9.uk" accesskey="h" title="dx9 (Alt + H)">dx9</a>
+            <div class="logo-switches">
+                <button id="theme-toggle" accesskey="t" title="(Alt + T)">
+                    <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <ul id="menu">
+        </ul>
+    </nav>
+</header>
+<main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    
+    <h1 class="post-title">
+      Nirvana Debugging
+    </h1>
+    <div class="post-meta"><span title='2023-11-01 21:53:54 +0000 UTC'>November 1, 2023</span>&nbsp;·&nbsp;8 min&nbsp;·&nbsp;1556 words&nbsp;·&nbsp;dx9
+
+</div>
+  </header> <div class="toc">
+    <details  open>
+        <summary accesskey="c" title="(Alt + C)">
+            <span class="details">Table of Contents</span>
+        </summary>
+
+        <div class="inner"><nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#introduction">Introduction</a></li>
+        <li><a href="#syscalls">Syscalls</a></li>
+        <li><a href="#nirvana-debugging-explained">Nirvana Debugging Explained</a></li>
+        <li><a href="#setup">Setup</a></li>
+        <li><a href="#our-assembly-function">Our assembly function</a></li>
+        <li><a href="#understanding-our-assembly-function">Understanding our assembly function</a></li>
+        <li><a href="#creating-our-hook">Creating our hook</a></li>
+        <li><a href="#initialising-our-hook">Initialising our hook</a></li>
+        <li><a href="#parsing-information-from-the-paramters">Parsing information from the paramters</a></li>
+        <li><a href="#our-hook-in-action">Our hook in action</a></li>
+        <li><a href="#conclusion">Conclusion</a></li>
+        <li><a href="#referencesresources">References/Resources</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        </div>
+    </details>
+</div>
+
+  <div class="post-content"><h3 id="introduction">Introduction<a hidden class="anchor" aria-hidden="true" href="#introduction">#</a></h3>
+<p>Hello, welcome to my blog. Today I&rsquo;ll be discussing how we can log, monitor and if wanted, spoof the return value of a syscall. Typically malicious developers will try to bypass hooks made on Nt functions by an anticheat developer by directly calling the function via a syscall. The way this method works is by setting up a callback which is invoked directly after the kernel gets back to user-mode. By setting this up we can actually <em>log</em> almost all syscalls. This is really beneficial paired with a handful of well-written sanity checks. The reason I say this is because, alone, the callback will merely log, almost, ALL syscalls whether they&rsquo;re legit or illegitimate all rely on the developer&rsquo;s sanity checks. I&rsquo;ll go into more detail in the next chapters about all of this information as well as more.</p>
+<h3 id="syscalls">Syscalls<a hidden class="anchor" aria-hidden="true" href="#syscalls">#</a></h3>
+<p>In Windows, all WinAPI functions go through a call stack similar to this our_application.exe-&gt;kernel32.dll-&gt;kernalbase.dll-&gt;ntdll.dll-&gt;syscall_invoked-&gt;kernel mode. As you can see, by using syscalls are indirectly telling the kernel land to execute code. Here is a little homebrewed image.
+<a href="/img/call_stack.png"><img loading="lazy" src="/img/call_stack.png" alt=""  />
+</a>
+As you can see from this image, by directly calling a syscall - malicious developers can basically bypass any hook placed on any of the previous functions (which is a common practice). Now, let&rsquo;s see how we can combat this by using the Nirvana Debugging method. This places a callback when the kernel tries to relay information back to the user application. Here&rsquo;s an updated image that will show where the callback will essentially sit.
+<a href="/img/call_stack_callback.png"><img loading="lazy" src="/img/call_stack_callback.png" alt=""  />
+</a>
+From this image, we can now see that instead of directly reporting back to the user-mode application and continuing execution, we go through a custom callback which gets invoked every time a syscall is fired!</p>
+<h3 id="nirvana-debugging-explained">Nirvana Debugging Explained<a hidden class="anchor" aria-hidden="true" href="#nirvana-debugging-explained">#</a></h3>
+<p>The way the Nirvana Debugging method works is by creating a hook that will call our callback with some parameters that we want to take a look into to create sanity checks to maintain the legitimacy of syscalls. The idea is useful to monitor direct syscalls which would otherwise be not possible in user mode. We use <em>NtSetInformationProcess</em> with the PROCESS_INFO_CLASS_INSTRUMENTATION <strong>(0x28 | 40)</strong> as the Process information class. We utilise an undocumented, but leaked, KPROCESS struct which is within kernel memory. Here&rsquo;s how it looks.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">typedef</span> <span style="color:#66d9ef">struct</span> <span style="color:#a6e22e">_PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION</span>
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>  ULONG Version;
+</span></span><span style="display:flex;"><span>  ULONG Reserved;
+</span></span><span style="display:flex;"><span>  PVOID Callback;
+</span></span><span style="display:flex;"><span>} PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION, <span style="color:#f92672">*</span>PPROCESS_INSTRUMENTATION_CALLBACK_INFORMATION;
+</span></span></code></pre></div><ul>
+<li>The version field refers to the architecture of the process we&rsquo;re installing the hook on. <strong>1 = x86; 0 = x64</strong>. For our PoC we&rsquo;ll be using x64.</li>
+<li>The reserved field is always 0.</li>
+<li>The callback field is a pointer to our assembly function which will call our hook.</li>
+</ul>
+<h3 id="setup">Setup<a hidden class="anchor" aria-hidden="true" href="#setup">#</a></h3>
+<p>To get started, we&rsquo;ll need to make sure our Visual Studio project can compile our .asm file. For this, we&rsquo;ll simply tick the masm field in the build customisations &amp; create a .asm file. Once our assembly file exists we&rsquo;ll need to think what we want to do to use this method to find malicious syscalls. Ideally, we want to get the syscall pointer &amp; return address. We can use both of these for heuristics &amp; actually see what function is even invoking syscall! This is important as we&rsquo;ll see later for some sanity checks. To begin with, since we want to store a value we&rsquo;re going to want to create an 8-byte value within our data section, and within our code section, we&rsquo;re going to create a function that will save registers, align stack, pass the parameters we want, call our hook, restore them after we&rsquo;re done and set rax to the value returned from our function.</p>
+<h3 id="our-assembly-function">Our assembly function<a hidden class="anchor" aria-hidden="true" href="#our-assembly-function">#</a></h3>
+<pre tabindex="0"><code>include ksamd64.inc
+EXTERN instrumentation_callback:proc ; our C function which is our actual hook
+
+.data
+	return_val QWORD 0
+
+.code
+
+instrumentation_callback_thunk proc
+	; save registers
+	push rax 
+	push rcx
+	push rbx
+	push rbp
+	push rdi
+	push rsi
+	push rsp
+
+	sub rsp, 20h ; align stack
+        mov rdx, rax
+        mov rcx, r10
+        call instrumentation_callback ; call hook with rax &amp; r10
+	mov QWORD PTR [return_val], rax ; set return value to what our function returned
+	add rsp, 20h ; align stack
+
+	; restore registers
+	pop rsp
+	pop rsi
+	pop rdi
+	pop rbp
+	pop rbx
+	pop rcx
+	pop rax
+	
+	; set rax to what our function returned
+	mov rax, QWORD PTR [return_val]
+        ret
+instrumentation_callback_thunk endp
+
+end
+</code></pre><h3 id="understanding-our-assembly-function">Understanding our assembly function<a hidden class="anchor" aria-hidden="true" href="#understanding-our-assembly-function">#</a></h3>
+<p>We must understand how this works, as said before we&rsquo;re simply preserving the registers, and after our hook is finished, we store the value returned from it and after restoring the registers to their original state we set rax to the value returned from our function. It&rsquo;s not important to spoof the return value from the syscall. I&rsquo;ve just added it in as a little bonus to show just how fascinating this entire project really is.</p>
+<h3 id="creating-our-hook">Creating our hook<a hidden class="anchor" aria-hidden="true" href="#creating-our-hook">#</a></h3>
+<p>This is the important part now, as you can see in the code;</p>
+<pre tabindex="0"><code>mov rdx, rax
+mov rcx, r10
+call instrumentation_callback ; call hook with rax &amp; r10
+</code></pre><p>We need to create a function with two parameters being; r10 &amp; rax. We&rsquo;ll use the value within r10 to get the address of where the syscall was invoked and we&rsquo;ll use rax to access what the function is returning, we can modify this or use it for an extra sanity check to combat malicious users attempting to spoof what syscall was actually called. Let&rsquo;s begin with creating an empty function and setting up some really cheap anti-recursion methods to attempt to keep our hook thread safe.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">bool</span> disable_recurs <span style="color:#f92672">=</span> false;
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> <span style="color:#a6e22e">instrumentation_callback</span>(<span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> r10, <span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> rax) {
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>disable_recurs) {
+</span></span><span style="display:flex;"><span>		disable_recurs <span style="color:#f92672">=</span> true;
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>        <span style="color:#75715e">// Checks written here
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>
+</span></span><span style="display:flex;"><span>		disable_recurs <span style="color:#f92672">=</span> false;
+</span></span><span style="display:flex;"><span>		<span style="color:#66d9ef">return</span> rax;
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">return</span> rax;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>We&rsquo;ll need to use <strong>extern &ldquo;C&rdquo;</strong> on both of our functions, the one we wrote in assembly and the one we wrote just above.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">extern</span> <span style="color:#e6db74">&#34;C&#34;</span> <span style="color:#66d9ef">void</span> instrumentation_callback_thunk();
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">extern</span> <span style="color:#e6db74">&#34;C&#34;</span> <span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> instrumentation_callback(<span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> r10, <span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> rax);
+</span></span></code></pre></div><h3 id="initialising-our-hook">Initialising our hook<a hidden class="anchor" aria-hidden="true" href="#initialising-our-hook">#</a></h3>
+<p>Now that we&rsquo;ve created our hook, we&rsquo;ll need to use NtSetInformationProcess to assign our hook. But just before that, let&rsquo;s create the structure and fill in the fields accordingly.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION <span style="color:#a6e22e">create_debugger</span>() {
+</span></span><span style="display:flex;"><span>	PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION nirvana_debugger;
+</span></span><span style="display:flex;"><span>	nirvana_debugger.Reserved <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; 
+</span></span><span style="display:flex;"><span>	nirvana_debugger.Version <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; <span style="color:#75715e">// x64
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>	nirvana_debugger.Callback <span style="color:#f92672">=</span> instrumentation_callback_thunk; <span style="color:#75715e">// our assembly function
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">return</span> nirvana_debugger;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>VOID <span style="color:#a6e22e">enable_debugger</span>(PROCESS_INSTRUMENTATION_CALLBACK_INFORMATION nirvana_debugger) {
+</span></span><span style="display:flex;"><span>	NtSetInformationProcess(GetCurrentProcess(), PROCESS_INFO_CLASS_INSTRUMENTATION, <span style="color:#f92672">&amp;</span>nirvana_debugger, <span style="color:#66d9ef">sizeof</span>(nirvana_debugger));
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>Just like that, if we were to have an output within our hook and we were to call any function really, you&rsquo;d get a hit. This is because our hook is fully installed, after every syscall the kernel will interact with our callback before the original call.</p>
+<h3 id="parsing-information-from-the-paramters">Parsing information from the paramters<a hidden class="anchor" aria-hidden="true" href="#parsing-information-from-the-paramters">#</a></h3>
+<p>Now that we are given r10 &amp; rax, let&rsquo;s actually put these parameters to use and get our information from them. As we remember, r10 will have information regarding the actual function that invoked the syscall. We&rsquo;ll use SymFromAddr(&hellip;) to get symbol information from the address. While we&rsquo;re at it, let&rsquo;s write a simple function which&rsquo;ll traverse the function bytes and extract the syscall. We can then use rax to output what the kernel returned and to top it off, we&rsquo;ll use r10 to get the return address for some extra debugging.</p>
+<h4 id="extract_syscall_from_fn">extract_syscall_from_fn<a hidden class="anchor" aria-hidden="true" href="#extract_syscall_from_fn">#</a></h4>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">uint16_t</span> <span style="color:#a6e22e">extract_syscall_from_fn</span>(<span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> start_address) {
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> curr_byte_addr <span style="color:#f92672">=</span> start_address;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">while</span> (<span style="color:#f92672">*</span><span style="color:#66d9ef">reinterpret_cast</span><span style="color:#f92672">&lt;</span>byte<span style="color:#f92672">*&gt;</span>(curr_byte_addr) <span style="color:#f92672">!=</span> <span style="color:#ae81ff">0xC3</span>) {
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>		<span style="color:#66d9ef">if</span> (<span style="color:#f92672">*</span><span style="color:#66d9ef">reinterpret_cast</span><span style="color:#f92672">&lt;</span>DWORD<span style="color:#f92672">*&gt;</span>(curr_byte_addr) <span style="color:#f92672">==</span> <span style="color:#ae81ff">0xb8d18b4c</span>) { <span style="color:#75715e">// mov r10, rcx
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>			<span style="color:#66d9ef">return</span> <span style="color:#f92672">*</span><span style="color:#66d9ef">reinterpret_cast</span><span style="color:#f92672">&lt;</span>byte<span style="color:#f92672">*&gt;</span>(curr_byte_addr <span style="color:#f92672">+</span> <span style="color:#ae81ff">4</span>); <span style="color:#75715e">// mov eax, id 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		}
+</span></span><span style="display:flex;"><span>		curr_byte_addr <span style="color:#f92672">+=</span> <span style="color:#ae81ff">0x4</span>;
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">return</span> <span style="color:#ae81ff">0x0</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><h4 id="our-finished-hook">Our finished hook<a hidden class="anchor" aria-hidden="true" href="#our-finished-hook">#</a></h4>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#66d9ef">bool</span> disable_recurs <span style="color:#f92672">=</span> false;
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> <span style="color:#a6e22e">instrumentation_callback</span>(<span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> r10, <span style="color:#66d9ef">unsigned</span> <span style="color:#66d9ef">__int64</span> rax) {
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span>disable_recurs) {
+</span></span><span style="display:flex;"><span>		disable_recurs <span style="color:#f92672">=</span> true;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		CHAR buffer[<span style="color:#66d9ef">sizeof</span>(SYMBOL_INFO) <span style="color:#f92672">+</span> MAX_SYM_NAME] <span style="color:#f92672">=</span> { <span style="color:#ae81ff">0</span> };
+</span></span><span style="display:flex;"><span>		PSYMBOL_INFO pSymbol <span style="color:#f92672">=</span> (PSYMBOL_INFO)buffer;
+</span></span><span style="display:flex;"><span>		pSymbol<span style="color:#f92672">-&gt;</span>SizeOfStruct <span style="color:#f92672">=</span> <span style="color:#66d9ef">sizeof</span>(SYMBOL_INFO);
+</span></span><span style="display:flex;"><span>		pSymbol<span style="color:#f92672">-&gt;</span>MaxNameLen <span style="color:#f92672">=</span> MAX_SYM_NAME;
+</span></span><span style="display:flex;"><span>		DWORD64 Displacement;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		BOOLEAN result <span style="color:#f92672">=</span> SymFromAddr(GetCurrentProcess(), r10, <span style="color:#f92672">&amp;</span>Displacement, pSymbol);
+</span></span><span style="display:flex;"><span>		<span style="color:#66d9ef">if</span> (result) {
+</span></span><span style="display:flex;"><span>			printf(<span style="color:#e6db74">&#34;[+] Func Called: %s</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">[+] Syscall id : %x</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">[+] Func returned: 0x%I64X</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">[+] Func return address: 0x%I64X</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">[-] Setting return</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#34;</span>, pSymbol<span style="color:#f92672">-&gt;</span>Name, syscalls<span style="color:#f92672">::</span>extract_syscall_from_fn(pSymbol<span style="color:#f92672">-&gt;</span>Address), rax, r10);
+</span></span><span style="display:flex;"><span>			rax <span style="color:#f92672">=</span> <span style="color:#ae81ff">0xDEEC59</span>;		<span style="color:#75715e">// Hehe, your return value is now dx9!	
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>		}
+</span></span><span style="display:flex;"><span>		disable_recurs <span style="color:#f92672">=</span> false;
+</span></span><span style="display:flex;"><span>		<span style="color:#66d9ef">return</span> rax;
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">return</span> rax;
+</span></span><span style="display:flex;"><span>	
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>Do note, spoofing the return value isn&rsquo;t necessary. This PoC was merely to show that it&rsquo;s possible.</p>
+<h3 id="our-hook-in-action">Our hook in action<a hidden class="anchor" aria-hidden="true" href="#our-hook-in-action">#</a></h3>
+<p>Now that our hook is finished just for the bare debugging we&rsquo;ll do as of now, let&rsquo;s directly invoke a syscall and see how our hook reacts.
+<a href="/img/syscall_hook.png"><img loading="lazy" src="/img/syscall_hook.png" alt=""  />
+</a>
+Congratulations, the manual syscall was logged and even the output was spoofed. Now that we can catch all syscalls we can create some sanity checks. These all depend on the developer but since we have the return address we can check if the invoked syscall was from an actual nt function or if it was directly invoked through inline assembly outside of the respective nt function, if it was through inline assembly that isn&rsquo;t from an nt function we can assume it was a malicious user trying to avoid a possible check an anti-cheat developer has written for any of the nt functions. A simple check could literally be bool was_nt_func = (pSymbol-&gt;Address == address_from_list_of_nt_functions);</p>
+<h3 id="conclusion">Conclusion<a hidden class="anchor" aria-hidden="true" href="#conclusion">#</a></h3>
+<p>In conclusion, we can tell just how powerful registering an instrumentation callback really is. It has allowed us to monitor almost all syscalls, manual or not - they&rsquo;ll get logged. I hope you learned something new from this blog, there are insane amounts of sanity checks you could create in paired with this to really monitor a large number of function calls within your application.</p>
+<h3 id="referencesresources">References/Resources<a hidden class="anchor" aria-hidden="true" href="#referencesresources">#</a></h3>
+<ul>
+<li><a href="https://github.com/ionescu007/HookingNirvana/blob/master/Esoteric%20Hooks.pdf">https://github.com/ionescu007/HookingNirvana/blob/master/Esoteric%20Hooks.pdf</a></li>
+<li><a href="https://www.usenix.org/legacy/events/vee06/full_papers/p154-bhansali.pdf">https://www.usenix.org/legacy/events/vee06/full_papers/p154-bhansali.pdf</a></li>
+</ul>
+
+
+  </div>
+
+  <footer class="post-footer">
+    <ul class="post-tags">
+    </ul>
+  </footer>
+</article>
+    </main>
+    
+<footer class="footer">
+    <span>&copy; 2023 <a href="https://dx9.uk">dx9</a></span>
+    <span>
+        Powered by
+        <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
+        <a href="https://github.com/adityatelange/hugo-PaperMod/" rel="noopener" target="_blank">PaperMod</a>
+    </span>
+</footer>
+<a href="#top" aria-label="go to top" title="Go to Top (Alt + G)" class="top-link" id="top-link" accesskey="g">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentColor">
+        <path d="M12 6H0l6-6z" />
+    </svg>
+</a>
+
+<script>
+    let menu = document.getElementById('menu')
+    if (menu) {
+        menu.scrollLeft = localStorage.getItem("menu-scroll-position");
+        menu.onscroll = function () {
+            localStorage.setItem("menu-scroll-position", menu.scrollLeft);
+        }
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+            var id = this.getAttribute("href").substr(1);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({
+                    behavior: "smooth"
+                });
+            } else {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();
+            }
+            if (id === "top") {
+                history.replaceState(null, null, " ");
+            } else {
+                history.pushState(null, null, `#${id}`);
+            }
+        });
+    });
+
+</script>
+<script>
+    var mybutton = document.getElementById("top-link");
+    window.onscroll = function () {
+        if (document.body.scrollTop > 800 || document.documentElement.scrollTop > 800) {
+            mybutton.style.visibility = "visible";
+            mybutton.style.opacity = "1";
+        } else {
+            mybutton.style.visibility = "hidden";
+            mybutton.style.opacity = "0";
+        }
+    };
+
+</script>
+<script>
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+        if (document.body.className.includes("dark")) {
+            document.body.classList.remove('dark');
+            localStorage.setItem("pref-theme", 'light');
+        } else {
+            document.body.classList.add('dark');
+            localStorage.setItem("pref-theme", 'dark');
+        }
+    })
+
+</script>
+</body>
+
+</html>

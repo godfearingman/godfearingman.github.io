@@ -6,7 +6,16 @@
     <description>Recent content in Posts on dx9</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>en-us</language>
-    <lastBuildDate>Sun, 29 Oct 2023 16:45:04 +0000</lastBuildDate><atom:link href="https://dx9.uk/posts/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Wed, 01 Nov 2023 21:53:54 +0000</lastBuildDate><atom:link href="https://dx9.uk/posts/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Nirvana Debugging</title>
+      <link>https://dx9.uk/posts/nirvana-debugging/</link>
+      <pubDate>Wed, 01 Nov 2023 21:53:54 +0000</pubDate>
+      
+      <guid>https://dx9.uk/posts/nirvana-debugging/</guid>
+      <description>Using the Nirvana Debugging method in order to monitor syscalls from usermode</description>
+    </item>
+    
     <item>
       <title>Checking HandleCount to prevent Unauthorised Code injection</title>
       <link>https://dx9.uk/posts/handlecount/</link>
