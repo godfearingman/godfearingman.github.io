@@ -195,7 +195,12 @@
         <li><a href="#understanding-our-assembly-function">Understanding our assembly function</a></li>
         <li><a href="#creating-our-hook">Creating our hook</a></li>
         <li><a href="#initialising-our-hook">Initialising our hook</a></li>
-        <li><a href="#parsing-information-from-the-paramters">Parsing information from the paramters</a></li>
+        <li><a href="#parsing-information-from-the-paramters">Parsing information from the paramters</a>
+          <ul>
+            <li><a href="#extract_syscall_from_fn">extract_syscall_from_fn</a></li>
+            <li><a href="#our-finished-hook">Our finished hook</a></li>
+          </ul>
+        </li>
         <li><a href="#our-hook-in-action">Our hook in action</a></li>
         <li><a href="#conclusion">Conclusion</a></li>
         <li><a href="#referencesresources">References/Resources</a></li>
@@ -375,7 +380,7 @@ Congratulations, the manual syscall was logged and even the output was spoofed. 
     </main>
     
 <footer class="footer">
-    <span>&copy; 2023 <a href="https://dx9.uk">dx9</a></span>
+    <span>&copy; 2024 <a href="https://dx9.uk">dx9</a></span>
     <span>
         Powered by
         <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
