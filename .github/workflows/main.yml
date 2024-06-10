@@ -11,6 +11,23 @@ jobs:
     steps:
       - name: Trigger GitHub Pages rebuild
         run: |
-          curl --fail --request POST \
+          response=$(curl --silent --write-out "HTTPSTATUS:%{http_code}" --request POST \
             --url https://api.github.com/repos/${{ github.repository }}/pages/builds \
-            --header "Authorization: Bearer ${{ secrets.USER_TOKEN }}"
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${{ secrets.USER_TOKEN }}" \
+            --header "X-GitHub-Api-Version: 2022-11-28")
+
+          http_status=$(echo $response | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+          http_body=$(echo $response | sed -e 's/HTTPSTATUS\:.*//g')
+
+          echo "HTTP Status: $http_status"
+          echo "Response Body: $http_body"
+
+          if [ $http_status -eq 201 ]; then
+            echo "GitHub Pages build triggered successfully."
+          else
+            echo "Failed to trigger GitHub Pages build. HTTP Status: $http_status"
+            exit 1
+          fi
+        env:
+          USER_TOKEN: ${{ secrets.USER_TOKEN }}
