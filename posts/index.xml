@@ -4,53 +4,51 @@
     <title>Posts on dx9</title>
     <link>https://dx9.uk/posts/</link>
     <description>Recent content in Posts on dx9</description>
-    <generator>Hugo -- gohugo.io</generator>
+    <generator>Hugo -- 0.134.2</generator>
     <language>en-us</language>
-    <lastBuildDate>Sun, 14 Apr 2024 12:45:30 +0000</lastBuildDate><atom:link href="https://dx9.uk/posts/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Tue, 17 Sep 2024 15:45:21 +0100</lastBuildDate>
+    <atom:link href="https://dx9.uk/posts/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>The Art of Game Hacking</title>
+      <link>https://dx9.uk/posts/the-art-of-game-hacking/</link>
+      <pubDate>Tue, 17 Sep 2024 15:45:21 +0100</pubDate>
+      <guid>https://dx9.uk/posts/the-art-of-game-hacking/</guid>
+      <description>A blog regarding the my view on Game Hacking</description>
+    </item>
     <item>
       <title>Page Table: From Virtual to Physical</title>
       <link>https://dx9.uk/posts/physical-memory/</link>
       <pubDate>Sun, 14 Apr 2024 12:45:30 +0000</pubDate>
-      
       <guid>https://dx9.uk/posts/physical-memory/</guid>
       <description>A blog regarding the Page Table and how Linear Addresses are translated to Physical</description>
     </item>
-    
     <item>
       <title>Nirvana Debugging</title>
       <link>https://dx9.uk/posts/nirvana-debugging/</link>
       <pubDate>Wed, 01 Nov 2023 21:53:54 +0000</pubDate>
-      
       <guid>https://dx9.uk/posts/nirvana-debugging/</guid>
       <description>Using the Nirvana Debugging method in order to monitor syscalls from usermode</description>
     </item>
-    
     <item>
       <title>Checking HandleCount to prevent Unauthorised Code injection</title>
       <link>https://dx9.uk/posts/handlecount/</link>
       <pubDate>Sun, 29 Oct 2023 16:45:04 +0000</pubDate>
-      
       <guid>https://dx9.uk/posts/handlecount/</guid>
       <description>A blog to detail how we can use NtQueryInformationProcess to check Code injection before the game has initialised</description>
     </item>
-    
     <item>
       <title>Restrict the creation of threads</title>
       <link>https://dx9.uk/posts/ntcreatethreadex/</link>
       <pubDate>Sun, 29 Oct 2023 16:45:04 +0000</pubDate>
-      
       <guid>https://dx9.uk/posts/ntcreatethreadex/</guid>
       <description>A blog about how you can restrict the use of NtCreateThreadEx</description>
     </item>
-    
     <item>
       <title>World of Warcraft Calling of Functions (WoTLK 3.3.5)</title>
       <link>https://dx9.uk/posts/wow-reversal/</link>
       <pubDate>Sun, 29 Oct 2023 16:45:04 +0000</pubDate>
-      
       <guid>https://dx9.uk/posts/wow-reversal/</guid>
       <description>A blog to detail how lua functions are called from a DLL</description>
     </item>
-    
   </channel>
 </rss>

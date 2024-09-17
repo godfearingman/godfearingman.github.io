@@ -10,9 +10,7 @@
 <meta name="description" content="A blog regarding the Page Table and how Linear Addresses are translated to Physical">
 <meta name="author" content="dx9">
 <link rel="canonical" href="https://dx9.uk/posts/physical-memory/">
-<link crossorigin="anonymous" href="/assets/css/stylesheet.5c25c975546c048d1a5600aadb48425ae1bc921a9a18fe67d6955c9535260811.css" integrity="sha256-XCXJdVRsBI0aVgCq20hCWuG8khqaGP5n1pVclTUmCBE=" rel="preload stylesheet" as="style">
-<script defer crossorigin="anonymous" src="/assets/js/highlight.acb54fd32bbc1982428b8850317e45d076b95012730a5936667e6bc21777692a.js" integrity="sha256-rLVP0yu8GYJCi4hQMX5F0Ha5UBJzClk2Zn5rwhd3aSo="
-    onload="hljs.initHighlightingOnLoad();"></script>
+<link crossorigin="anonymous" href="/assets/css/stylesheet.54405a410796490bc874ab6181fac9b675753cc2b91375d8f882566459eca428.css" integrity="sha256-VEBaQQeWSQvIdKthgfrJtnV1PMK5E3XY&#43;IJWZFnspCg=" rel="preload stylesheet" as="style">
 <link rel="icon" href="https://dx9.uk/favicon.ico">
 <link rel="icon" type="image/png" sizes="16x16" href="https://dx9.uk/favicon-16x16.png">
 <link rel="icon" type="image/png" sizes="32x32" href="https://dx9.uk/favicon-32x32.png">
@@ -20,6 +18,7 @@
 <link rel="mask-icon" href="https://dx9.uk/safari-pinned-tab.svg">
 <meta name="theme-color" content="#2e2e33">
 <meta name="msapplication-TileColor" content="#2e2e33">
+<link rel="alternate" hreflang="en" href="https://dx9.uk/posts/physical-memory/">
 <noscript>
     <style>
         #theme-toggle,
@@ -37,7 +36,7 @@
                 --secondary: rgb(155, 156, 157);
                 --tertiary: rgb(65, 66, 68);
                 --content: rgb(196, 196, 197);
-                --hljs-bg: rgb(46, 46, 51);
+                --code-block-bg: rgb(46, 46, 51);
                 --code-bg: rgb(55, 56, 62);
                 --border: rgb(51, 51, 51);
             }
@@ -72,16 +71,16 @@
 {
   "@context": "https://schema.org",
   "@type": "BreadcrumbList",
-  "itemListElement": [, 
+  "itemListElement": [
     {
       "@type": "ListItem",
-      "position":  2 ,
+      "position":  1 ,
       "name": "Posts",
       "item": "https://dx9.uk/posts/"
     }, 
     {
       "@type": "ListItem",
-      "position":  3 ,
+      "position":  2 ,
       "name": "Page Table: From Virtual to Physical",
       "item": "https://dx9.uk/posts/physical-memory/"
     }
@@ -138,7 +137,7 @@
 <header class="header">
     <nav class="nav">
         <div class="logo">
-            <a href="https://dx9.uk" accesskey="h" title="dx9 (Alt + H)">dx9</a>
+            <a href="https://dx9.uk/" accesskey="h" title="dx9 (Alt + H)">dx9</a>
             <div class="logo-switches">
                 <button id="theme-toggle" accesskey="t" title="(Alt + T)">
                     <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
@@ -171,7 +170,7 @@
 <article class="post-single">
   <header class="post-header">
     
-    <h1 class="post-title">
+    <h1 class="post-title entry-hint-parent">
       Page Table: From Virtual to Physical
     </h1>
     <div class="post-meta"><span title='2024-04-14 12:45:30 +0000 UTC'>April 14, 2024</span>&nbsp;·&nbsp;11 min&nbsp;·&nbsp;2216 words&nbsp;·&nbsp;dx9
@@ -397,7 +396,8 @@ System Programming Guide</p>
     </main>
     
 <footer class="footer">
-    <span>&copy; 2024 <a href="https://dx9.uk">dx9</a></span>
+        <span>&copy; 2024 <a href="https://dx9.uk/">dx9</a></span> · 
+
     <span>
         Powered by
         <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
