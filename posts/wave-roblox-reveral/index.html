@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto">
+
+<head><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta name="robots" content="index, follow">
+<title>Instrumentation Callbacks Unraveled: Wave (partial Hyperion) | dx9</title>
+<meta name="keywords" content="">
+<meta name="description" content="Reverse Engineering the Instrumentation Callbacks present within Wave &amp; Hyperion">
+<meta name="author" content="dx9">
+<link rel="canonical" href="https://dx9.uk/posts/wave-roblox-reveral/">
+<link crossorigin="anonymous" href="/assets/css/stylesheet.54405a410796490bc874ab6181fac9b675753cc2b91375d8f882566459eca428.css" integrity="sha256-VEBaQQeWSQvIdKthgfrJtnV1PMK5E3XY&#43;IJWZFnspCg=" rel="preload stylesheet" as="style">
+<link rel="icon" href="https://dx9.uk/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="https://dx9.uk/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="https://dx9.uk/favicon-32x32.png">
+<link rel="apple-touch-icon" href="https://dx9.uk/apple-touch-icon.png">
+<link rel="mask-icon" href="https://dx9.uk/safari-pinned-tab.svg">
+<meta name="theme-color" content="#2e2e33">
+<meta name="msapplication-TileColor" content="#2e2e33">
+<link rel="alternate" hreflang="en" href="https://dx9.uk/posts/wave-roblox-reveral/">
+<noscript>
+    <style>
+        #theme-toggle,
+        .top-link {
+            display: none;
+        }
+
+    </style>
+    <style>
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --theme: rgb(29, 30, 32);
+                --entry: rgb(46, 46, 51);
+                --primary: rgb(218, 218, 219);
+                --secondary: rgb(155, 156, 157);
+                --tertiary: rgb(65, 66, 68);
+                --content: rgb(196, 196, 197);
+                --code-block-bg: rgb(46, 46, 51);
+                --code-bg: rgb(55, 56, 62);
+                --border: rgb(51, 51, 51);
+            }
+
+            .list {
+                background: var(--theme);
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-track {
+                background: 0 0;
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-thumb {
+                border-color: var(--theme);
+            }
+        }
+
+    </style>
+</noscript><meta property="og:title" content="Instrumentation Callbacks Unraveled: Wave (partial Hyperion)" />
+<meta property="og:description" content="Reverse Engineering the Instrumentation Callbacks present within Wave &amp; Hyperion" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://dx9.uk/posts/wave-roblox-reveral/" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2024-09-24T19:38:57+01:00" />
+<meta property="article:modified_time" content="2024-09-24T19:38:57+01:00" />
+
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="Instrumentation Callbacks Unraveled: Wave (partial Hyperion)"/>
+<meta name="twitter:description" content="Reverse Engineering the Instrumentation Callbacks present within Wave &amp; Hyperion"/>
+
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position":  1 ,
+      "name": "Posts",
+      "item": "https://dx9.uk/posts/"
+    }, 
+    {
+      "@type": "ListItem",
+      "position":  2 ,
+      "name": "Instrumentation Callbacks Unraveled: Wave (partial Hyperion)",
+      "item": "https://dx9.uk/posts/wave-roblox-reveral/"
+    }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Instrumentation Callbacks Unraveled: Wave (partial Hyperion)",
+  "name": "Instrumentation Callbacks Unraveled: Wave (partial Hyperion)",
+  "description": "Reverse Engineering the Instrumentation Callbacks present within Wave \u0026amp; Hyperion",
+  "keywords": [
+    
+  ],
+  "articleBody": "Introduction Hello all, in this blog we’ll be talking, once again, about instrumentation callbacks but more specifically in some real life use cases like Hyperion, a very good security product written by the developers at, now acquired, Byfron. We’ll also be reverse engineering, what appears to be, a Roblox cheating tool that seems to be using instrumentation callbacks as a form of code execution.\nWhat an instrumentation callback is For an in-depth explanation of what a callback is, you can refer to my previous blog titled “Nirvana Debugging”. As a shallow explanation, it’s a kernel callback to which any syscall execution will end up relocating. In other words, any call to a syscall will be routed to a registered instrumentation callback if installed. With this knowledge, we know that the syscall WILL be executed; there is no way for it to be paused through an instrumentation callback - we can only handle any actions after it has already been executed. The kernel sends back a PCONTEXT which describes the current thread’s stack after the call has been invoked. From here, we can either parse out specific data from the registers or take the entire PCONTEXT itself. Some key registers to focus on will be RIP, RCX, and R10. I’ll talk more in detail soon about what these three registers hold, as the callbacks we reverse engineer later will make use of these three in particular. I do recommend you come into this blog knowing what this form of callback is and how it works. The Instrumentation callback can actually also pick up other callbacks. What I mean by this is that other kernel callbacks regarding thread execution, exception handling, or anything similar can be picked up via this callback.\nImportant Registers to note Rax -\u003e Return of the function that was last called that’s now trapped within the IC R10 -\u003e Origin of last function Rcx -\u003e Address of IC Kernel Callbacks: Watchlist Here, we need to discuss some of the kernel callbacks that we should know about, including why they’re there and what they do. This information is important as it will help us understand exactly how code execution can be tracked.\nKernel Callbacks: LdrInitializeThunk First on the list is LdrInitializeThunk. As you may already know, LdrInitializeThunk is crucial in thread creation. It initializes the thread in the context of the process and is mandatory. Any created thread’s true start address is not the one the user specifies, but actually LdrInitializeThunk. With this knowledge, let’s look at what C-like pseudocode for this function might look like.\nVOID LdrInitializeThunk( __in PCONTEXT Context, __in PVOID NtDllBaseAddress ) { NTSTATUS Status; // // Call LdrpInitialize to perform process or thread initialization tasks. // LdrpInitialize( Context, NtDllBaseAddress ); // // Resume execution at the user-supplied thread context. // Status = NtContinue( Context, TRUE ); // // NtContinue should never return. // RtlRaiseStatus( Status ); __debugbreak(); } Now that we know the thread’s true start address is here and not where the user specified, we can apply some security analysis to explore how we can use this to prevent thread creation in a hook-less scenario. If the malicious actor has no idea we have an IC (Instrumentation Callback) installed, they’d be completely oblivious to this form of analysis.\nLockdown: LdrInitializeThunk Assuming we’ve already got an IC (Instrumentation Callback) installed, we can do the following: Apply the knowledge we have of what registers hold which values. R10 will be the syscall origin. If the origin is from LdrInitializeThunk, we can call a custom handler and validate whatever we need. Something like this:\ncmp qword [LdrInitializeThunk], r10 je some_ldr_init_thunk_checker This will jump to our own custom handler before it returns to the end-user. In the handler, we can perform sanity checks on any newly created thread. These checks can be as trivial or as complex as you want them to be, as ideally we’ll just need to check the start address for basics. We can use NtQueryInformationThread to get the start address. If it fails the sanity check, we can terminate the thread before it even executes.\nKernel Callbacks: KiUserApcDispatcher To understand this callback, we first need to understand APCs. Essentially, APCs are added to a FIFO (First In, First Out) queue, and when a thread enters an alertable state, any APCs on the queue are executed one by one, with their respective APC routines being called. When this happens, underneath the hood, it’s all handled within KiUserApcDispatcher. This function runs the APC and then eventually calls NtContinue in order to restore the original thread context. It sounds like we can lock down this function, doesn’t it? Knowing that malicious actors can queue APCs in order to get code execution instead of creating their own thread, we need to secure this too.\nLockdown: KiUserApcDispatcher cmp qword [KiUserApcDispatcher], r10 je some_apc_dispatcher_handler This is where it might get a little tricky. If we get this hit, it means that the APC has already been dispatched. To attempt to find whatever APC was just executed, we could use a method like stack tracing. Since we know that the APC has been dispatched to an alertable thread, we can iterate through all threads and create a stack backtrace for each. Then, we can check if anything within the stack leads to an area of memory that it shouldn’t be within.\nKernel Callbacks: KiUserExceptionDispatcher Essentially, this will be a bit tricky, but what this callback does is forward exceptions to any existing handler if it exists. In the context of our instrumentation callback, this could be seen as a middle ground between forwarding the exception and handling the exception. Imagine a scenario where we encrypt our pages and only decrypt them if they’re accessed from a region that’s created and managed by us, in other words, whitelisted. What we can do is only decrypt it if the access is valid - this is a little difficult without any parameters.\nLockdown: KiUserExceptionDispatcher cmp qword [KiUserExceptionDispatcher], r10 je some_exception_handler Once again, this is where it becomes a little tedious. Since we cannot access the original parameters and we’re in the scenario of a “We encrypt pages, let’s make sure any calls to a whitelisted page that is currently encrypted are only decrypted if called from another whitelisted page”. What we can do is, we know that the exception was created, let’s only focus on access violations so we can just check the rax register, if it’s an access violation code we can perform another stack trace. We can check that if the call to the whitelisted page or anything really within the stack trace is from outside a whitelisted page, we can just not let the exception be forwarded to the exception handler for decryption or however we setup our decryption sequence. This will leave the page encrypted and the exception unhandled. Here’s an example of what the stack would look like (Top -\u003e Bottom)\nInstrumentation Callback \u003c—— us KiUserExceptionDispatcher \u003c—— the callback Exception Handling Frame Encrypted page \u003c—— where the exception was generated Malicious or non malicious page \u003c—— where the exception was generated from …. Instrumentation Callback: Wave So it begins. Here’s a little debrief: Wave is a cheating tool used on Roblox. I found interest in it as it appears to be the largest paid cheating tool for Roblox at this moment in time. Although it’s detected and the developers don’t seem to care, I figured we might as well take a look at it. The instrumentation callback is quite large, so we’ll split it into chunks in order to see what exactly it’s doing and attempt to figure out what the actual core of the code execution derives from.\nSection 1: Handling Callbacks pushfq push rdx lea rdx, [some_structure] cmp rcx, QWORD PTR [rdx+8] cmove rcx, QWORD PTR [some_structure] cmp r10, QWORD PTR [rdx+018h] je skip_path cmp r10, QWORD PTR [rdx+020h] je skip_path cmp r10, QWORD PTR [rdx+028h] je skip_path cmp r10, QWORD PTR [rdx+010h] je handle_exception In this section of assembly, we can see quite a few things happening. Just to note, this is the start and this is where we’re going to be analysing this foreign structure that they seem to initialise before creating this callback. We can tell that rdx + 8 will be their instrumentation callback address, I analysed the next few offsets dynamically, here is what the structure looks thus far.\n; +0 -\u003e roblox instrumentation callback address ; +8 -\u003e wave instrumentation callback address ; +10 -\u003e KiUserExceptionDispatcher address ; +18 -\u003e LdrInitializeThunk address ; +20 -\u003e KiUserApcDispatcher address ; +28 -\u003e KiUserCallbackDispatcher address (?) The code so far is pretty simple, looks like anything that isn’t an exception should just be ignored so far, this is typical because we know that Roblox will strip any allocation that has the execution protection if it’s not whitelisted. Once an exception occurs (attempted execution in non whitelisted page), Wave’s handler will take over. What’s interesting to see is that LdrInitializeThunk is ignored, this suggests that wave is not creating their own thread or queuing an APC.\nAnother thing to note is, the instructions\nlea rdx, [some_structure] cmp rcx, QWORD PTR [rdx+8] cmove rcx, QWORD PTR [some_structure] This is actually interesting, this let’s us realise that what they’re doing is installing their instrumentation callback and actually just jmping to roblox’s original callback immediately after they’re done, that’s where skip_path comes into play.\nThe reason they’re setting rcx to roblox’s instrumentation callback is because, as noted earlier, RCX will contain the instrumentation callback address, Roblox (as shown later on) verify if the RCX register holds roblox’s instrumentation callback or not, these instructions in wave will help pass that check (if you could call it one).\nThe Pseudolike representation of these instructions so far are something along the lines of this\nvoid ic() { if (rcx == some_structure-\u003ewave_ic) rcx = some_structure-\u003eroblox_ic; /* ignored_functions_map = { some_structure-\u003eLdrInitializeThunk, some_structure-\u003eKiUserCallbackDispatcher, some_structure-\u003eKiUserApcDispatcher } */ if (ignored_functions_map.find(r10) != ignored_functions_map.end()) goto skip_path; else if (r10 == some_structure-\u003eKiUserExceptionDispatcher) goto handle_exception; //.... } Section 2: Initialisation cmp eax, 0C000001Ch je set_rax_to_zero cmp eax, 0124h je isprocessinjobcheck push rax mov rax, rsp mov rdx, gs:[030h] mov rdx, [rdx+010h] sub rax, 4D0h and rax, -16 sub rax, 060h cmp rax, rdx jb skip_path_copy mov rdx, gs:[030h] mov edx, DWORD PTR [rdx+016B4h] cmp edx, DWORD PTR [some_structure+0560h] jne set_debug_registers lea rdx, [some_structure] xor rax, rax mov eax, DWORD PTR [rdx+038h] cmp eax, 1 jne skip_path_copy xor rax, rax lock xchg DWORD PTR [rdx+038h], eax cmp eax, 1 jne skip_path_copy pop rax pop rdx popfq A lot to unpack here, let’s begin by splitting it into even more chunks, the first chunk we’ll be looking at is the first two comparisons.\ncmp eax, 0C000001Ch je set_rax_to_zero cmp eax, 0124h je spoof_job Looks like we’re dealing with some NTSTATUS returns, the first one sets any invalid calls return to zero(hence the name), the second one appears to replace the value of eax to spoof a job to appear as though it’s not running, this is what makes me believe there is something important going on here exactly.\npush rax mov rax, rsp mov rdx, gs:[030h] mov rdx, [rdx+010h] sub rax, 4D0h and rax, -16 sub rax, 060h cmp rax, rdx jb skip_path_copy This just appears to be some sort of stack limit check vs stack pointer, not too sure entirely what’s going on here but it seems to be a deciding factor if they should ignore it.\nmov rdx, gs:[030h] mov edx, DWORD PTR [rdx+016B4h] cmp edx, DWORD PTR [some_structure+0560h] jne set_debug_registers This is an important part, this checks the error code of the current thread and compares it with a field in the self-made structure, this appears to be some indicator in order to set the debug registers, the branch is named accordingly. The new structure will be posted at the bottom.\nlea rdx, [some_structure] xor rax, rax mov eax, DWORD PTR [rdx+038h] cmp eax, 1 jne skip_path_copy xor rax, rax lock xchg DWORD PTR [rdx+038h], eax cmp eax, 1 jne skip_path_copy pop rax pop rdx popfq This part is pretty straight forward, it just appears to be checking a flag to see if the initialisation is complete, remember this is ran on every single thread so there is most definitely a scenario where this is currently being initialised. lock xchg is an atomic instruction set that will 100% execute uninterrupted.\nThe updated structure appears as follows\n; +0 -\u003e roblox instrumentation callback address ; +8 -\u003e wave instrumentation callback address ; +10 -\u003e KiUserExceptionDispatcher address ; +18 -\u003e LdrInitializeThunk address ; +20 -\u003e KiUserApcDispatcher address ; +28 -\u003e KiUserCallbackDispatcher address (?) ; +30 -\u003e ? ; +38 -\u003e initialised flag address ; +60 -\u003e thread context ... ; +560 -\u003e debug registers code to reset The updated pseudocode is as follows\nvoid ic() { if (rcx == some_structure-\u003ewave_ic) rcx = some_structure-\u003eroblox_ic; /* ignored_functions_map = { some_structure-\u003eLdrInitializeThunk, some_structure-\u003eKiUserCallbackDispatcher, some_structure-\u003eKiUserApcDispatcher } */ if (ignored_functions_map.find(r10) != ignored_functions_map.end()) goto skip_path; else if (r10 == some_structure-\u003eKiUserExceptionDispatcher) goto handle_exception; uint32_t eax = (uint32_t)rax; if (eax == 0xC000001c) *rax = 0; else if (eax = 0x124) goto spoof_job; if (stack_pointer \u003c thread_stack_limit) goto skip_path_copy; if (thread_error_mode != some_structure-\u003ereset_hwbp_code) goto set_debug_registers; if (some_structure-\u003einitialised == 1) goto skip_path_copy; //do atomically some_structure-\u003einitialised = 1; } Section 3: Code execution sub rsp, 8 mov QWORD PTR [rsp], 0 mov rcx, rsp mov rdx, qword ptr [some_structure+0530h] mov r8, qword ptr [some_structure+0548h] xor r9, r9 mov rax, qword ptr [some_structure+0538h] sub rsp, 20h call rax add rsp, 20h test eax, eax js push_rsp_by_8 pop rcx mov rax, qword ptr [some_structure+0540h] sub rsp, 28h call rax ; TpPostWork add rsp, 28h jmp restore_context Finally, something interesting. It appears like we have two function calls. I went and traced to see what the functions are and they appear to be TpAllocWork and TpPostWork, interesting isn’t it? makes sense with the earlier check previously. Let’s deserialise the arguments and add it to the memory structure properly.\nThe updated structure appears as follows\n; +0 -\u003e roblox instrumentation callback address ; +8 -\u003e wave instrumentation callback address ; +10 -\u003e KiUserExceptionDispatcher address ; +18 -\u003e LdrInitializeThunk address ; +20 -\u003e KiUserApcDispatcher address ; +28 -\u003e KiUserCallbackDispatcher address (?) ; +30 -\u003e ? ; +38 -\u003e initialised flag address ; +60 -\u003e thread context ... ; +530 -\u003e work thread address ; +538 -\u003e TpAllocWork address ; +540 -\u003e TpPostWork addresss ; +548 -\u003e callback address (?) ; +560 -\u003e debug registers code to reset The updated pseudocode is as follows\nvoid ic() { if (rcx == some_structure-\u003ewave_ic) rcx = some_structure-\u003eroblox_ic; /* ignored_functions_map = { some_structure-\u003eLdrInitializeThunk, some_structure-\u003eKiUserCallbackDispatcher, some_structure-\u003eKiUserApcDispatcher } */ if (ignored_functions_map.find(r10) != ignored_functions_map.end()) goto skip_path; else if (r10 == some_structure-\u003eKiUserExceptionDispatcher) goto handle_exception; uint32_t eax = (uint32_t)rax; if (eax == 0xC000001c) *rax = 0; else if (eax = 0x124) goto spoof_job; if (stack_pointer \u003c thread_stack_limit) goto skip_path_copy; if (thread_error_mode != some_structure-\u003ereset_hwbp_code) goto set_debug_registers; if (some_structure-\u003einitialised == 1) goto skip_path_copy; //do atomically some_structure-\u003einitialised = 1; T work = T(); auto result = TpAllocWork(\u0026work, some_structure-\u003ework_thread, some_structure-\u003ecallback, 0); if (result \u003c 0) // add rsp by 8 and return TpPostWork(work); //return } Section 4: Page deryption No assembly here as it’s extremely trivial. After encountering an exception, Wave will check if it’s an access violation or if it’s a single step code. If it’s an access violation it will just call Roblox’s default page decryptor function. If it’s a hardware breakpoint, it’ll check what index of the debug register was triggered, if it’s 2, it’ll set rax to zero, if it’s 4 it’ll call a separate function which whil thwart with query virtual memory in order to attempt to hide their allocation by modifying their allocation entry within the hyperion blacklist. Index 8 will skip HWBP detections.\nSection 5: Recap Well, that’s pretty much all there is for Wave, it seems they’re just using cheap tricks to get by and honestly - it’s somewhat impressive but still disappointing that it’s almost like a ducktaped method, cheap tricks never last. We’ve now analysed exactly how they keep their allocation “safe”(?) and how they’re executing code.\nInstrumentation Callback: Hyperion Onto Hyperion, Hyperion has a really strong implementation of a well written and smart Instrumentation Callback, it only appears to target three callbacks and all three are ones already discussed in this blog, I didn’t just ramble about those callbacks for no reason. I apologise ahead of time that this area will be a little bare as compared with wave, this is because of the heavy obfuscation within Hyperion. Luckily, I’ve already annotated the main premise of the instrumentation callback, let’s check it out.\nSection 1: The Instrumentation Callback ; preserve_registers push r10 ; syscall origin push rax ; syscall return pushfq push rbx mov rbx,rsp ; store original stack pointer ; check if rcx contains address of ic (it always should (?)) lea rax,[RobloxPlayerBeta.dll+C4A0A0] { (-1672457663) } ; set rax to start of IC cmp rcx,rax ; Check if shellcode is the hardcoded start of what it should be ? cmove rcx,r10 ; set rcx to the syscall origin (where it was invoked) ; Allocate 0xC0 bytes onto stack \u0026 align to 16 byte boundary lea r10,[rsp-000000C0] and r10,-10 { 240 } mov rsp,r10 cld ; Store registers onto allocated memory (some sort of stack struct) mov [rsp+000000B0],rcx mov [rsp+000000A8],rdx mov [rsp+000000A0],r8 mov [rsp+00000098],r9 mov [rsp+00000090],r11 movaps [rsp+00000080],xmm0 movaps [rsp+70],xmm1 movaps [rsp+60],xmm2 movaps [rsp+50],xmm3 movaps [rsp+40],xmm4 movaps [rsp+30],xmm5 mov rcx,[rbx+18] ; rcx = rip ; rcx = first param, don't see anything regarding a rdx for the second param call RobloxPlayerBeta.dll+14AF110 ; from what i can see, this will verify the RIP ; set rip to new return from call \u0026 restore all registers mov [rbx+18],rax mov rcx,[rsp+000000B0] mov rdx,[rsp+000000A8] mov r8,[rsp+000000A0] mov r9,[rsp+00000098] mov r11,[rsp+00000090] movaps xmm0,[rsp+00000080] movaps xmm1,[rsp+70] movaps xmm2,[rsp+60] movaps xmm3,[rsp+50] movaps xmm4,[rsp+40] movaps xmm5,[rsp+30] mov rsp,rbx pop rbx popfq pop rax pop r10 jmp r10 ; return to code (modified or original, depending on verifier call) Seems pretty straight forward and well written as compared to the previous, it’s actually intersting to see. The only parameter that’s passed to the function is rip (r10), this is where all the main handlers and checks are.\nSection 2: The Verifier push rbp push r15 push r14 push r13 push r12 push rsi push rdi push rbx sub rsp, 0x5f8 lea rbp, [rsp+0x80] mov qword [rbp+0x570], 0xfffffffffffffffe mov rsi, rcx ; rsi = syscall origin mov r8, qword [gs:0x30] movzx eax, byte [r8+0x2ec] test al, 0x1 jne InstrumentationDisabled mov rdi, qword [r8 {_TEB::NtTib.ExceptionList}] cmp qword [rel KiUserExceptionDispatcher], rsi je Return$sub_7ffd2af6a060 cmp qword [rel LdrInitializeThunk], rsi je Return$sub_7ffd2af6a180 cmp qword [rel KiUserApcDispatcher], rsi je Return$sub_7ffd2af6a170 jmp Return$DisableIC As we can see, there are three setup handlers for each of those 3 important callbacks, it’s here where they perform all the sanity checks on what should and should not happen, unfortunately I cannot show in detail what type of sanity checks they do but they are very thorough - especailly for the creation of threads. Each of those function handlers are, in what appears to be, hooked tailcalls.\nSection 3: Post-verifier After the verification is finished, a modified (or original) r10 is returned, it’s from here that decides whether to continue or not to in terms of whatever path of execution is currently happening.\nSection 4: Recap So, it just appears that Hyperions implementation of an instrumentation callback is strictly for prevention of code execution as well as handling any exceptions raised in whatever allocation there may be.\nConclusion Thank you very much for reading, I mean no disrespect to either sides of the parties involved in this blog. I’m a very curious person and decided to try and figure something new out. I do apologise for any incorrect information that may be present here, everything I’ve written is all hypothetical in a sense. Please reach out to me if you’ve got any issues within this blog or want to correct a mistake.\nReferences C-Like representation of LdrInitializeThunk\n",
+  "wordCount" : "3326",
+  "inLanguage": "en",
+  "datePublished": "2024-09-24T19:38:57+01:00",
+  "dateModified": "2024-09-24T19:38:57+01:00",
+  "author":{
+    "@type": "Person",
+    "name": "dx9"
+  },
+  "mainEntityOfPage": {
+    "@type": "WebPage",
+    "@id": "https://dx9.uk/posts/wave-roblox-reveral/"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "dx9",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://dx9.uk/favicon.ico"
+    }
+  }
+}
+</script>
+</head>
+
+<body class="" id="top">
+<script>
+    if (localStorage.getItem("pref-theme") === "dark") {
+        document.body.classList.add('dark');
+    } else if (localStorage.getItem("pref-theme") === "light") {
+        document.body.classList.remove('dark')
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.classList.add('dark');
+    }
+
+</script>
+
+<header class="header">
+    <nav class="nav">
+        <div class="logo">
+            <a href="https://dx9.uk/" accesskey="h" title="dx9 (Alt + H)">dx9</a>
+            <div class="logo-switches">
+                <button id="theme-toggle" accesskey="t" title="(Alt + T)">
+                    <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <ul id="menu">
+        </ul>
+    </nav>
+</header>
+<main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    
+    <h1 class="post-title entry-hint-parent">
+      Instrumentation Callbacks Unraveled: Wave (partial Hyperion)
+    </h1>
+    <div class="post-meta"><span title='2024-09-24 19:38:57 +0100 BST'>September 24, 2024</span>&nbsp;·&nbsp;16 min&nbsp;·&nbsp;3326 words&nbsp;·&nbsp;dx9
+
+</div>
+  </header> <div class="toc">
+    <details  open>
+        <summary accesskey="c" title="(Alt + C)">
+            <span class="details">Table of Contents</span>
+        </summary>
+
+        <div class="inner"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#introduction">Introduction</a></li>
+    <li><a href="#what-an-instrumentation-callback-is">What an instrumentation callback is</a></li>
+    <li><a href="#important-registers-to-note">Important Registers to note</a></li>
+    <li><a href="#kernel-callbacks-watchlist">Kernel Callbacks: Watchlist</a>
+      <ul>
+        <li><a href="#kernel-callbacks-ldrinitializethunk">Kernel Callbacks: LdrInitializeThunk</a>
+          <ul>
+            <li><a href="#lockdown-ldrinitializethunk">Lockdown: LdrInitializeThunk</a></li>
+          </ul>
+        </li>
+        <li><a href="#kernel-callbacks-kiuserapcdispatcher">Kernel Callbacks: KiUserApcDispatcher</a>
+          <ul>
+            <li><a href="#lockdown-kiuserapcdispatcher">Lockdown: KiUserApcDispatcher</a></li>
+          </ul>
+        </li>
+        <li><a href="#kernel-callbacks-kiuserexceptiondispatcher">Kernel Callbacks: KiUserExceptionDispatcher</a>
+          <ul>
+            <li><a href="#lockdown-kiuserexceptiondispatcher">Lockdown: KiUserExceptionDispatcher</a></li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+    <li><a href="#instrumentation-callback-wave">Instrumentation Callback: Wave</a>
+      <ul>
+        <li><a href="#section-1-handling-callbacks">Section 1: Handling Callbacks</a></li>
+        <li><a href="#section-2-initialisation">Section 2: Initialisation</a></li>
+        <li><a href="#section-3-code-execution">Section 3: Code execution</a></li>
+        <li><a href="#section-4-page-deryption">Section 4: Page deryption</a></li>
+        <li><a href="#section-5-recap">Section 5: Recap</a></li>
+      </ul>
+    </li>
+    <li><a href="#instrumentation-callback-hyperion">Instrumentation Callback: Hyperion</a>
+      <ul>
+        <li><a href="#section-1-the-instrumentation-callback">Section 1: The Instrumentation Callback</a></li>
+        <li><a href="#section-2-the-verifier">Section 2: The Verifier</a></li>
+        <li><a href="#section-3-post-verifier">Section 3: Post-verifier</a></li>
+        <li><a href="#section-4-recap">Section 4: Recap</a></li>
+      </ul>
+    </li>
+    <li><a href="#conclusion">Conclusion</a></li>
+    <li><a href="#references">References</a></li>
+  </ul>
+</nav>
+        </div>
+    </details>
+</div>
+
+  <div class="post-content"><h2 id="introduction">Introduction<a hidden class="anchor" aria-hidden="true" href="#introduction">#</a></h2>
+<p>Hello all, in this blog we&rsquo;ll be talking, once again, about instrumentation callbacks but more specifically in some real life use cases like Hyperion, a very good security product written by the developers at, now acquired, Byfron. We&rsquo;ll also be reverse engineering, what appears to be, a Roblox cheating tool that seems to be using instrumentation callbacks as a form of code execution.</p>
+<h2 id="what-an-instrumentation-callback-is">What an instrumentation callback is<a hidden class="anchor" aria-hidden="true" href="#what-an-instrumentation-callback-is">#</a></h2>
+<p>For an in-depth explanation of what a callback is, you can refer to my previous blog titled &ldquo;Nirvana Debugging&rdquo;. As a shallow explanation, it&rsquo;s a kernel callback to which any syscall execution will end up relocating. In other words, any call to a syscall will be routed to a registered instrumentation callback if installed. With this knowledge, we know that the syscall WILL be executed; there is no way for it to be paused through an instrumentation callback - we can only handle any actions after it has already been executed. The kernel sends back a PCONTEXT which describes the current thread&rsquo;s stack after the call has been invoked. From here, we can either parse out specific data from the registers or take the entire PCONTEXT itself. Some key registers to focus on will be <strong>RIP</strong>, <strong>RCX</strong>, and <strong>R10</strong>. I&rsquo;ll talk more in detail soon about what these three registers hold, as the callbacks we reverse engineer later will make use of these three in particular. I do recommend you come into this blog knowing what this form of callback is and how it works. The Instrumentation callback can actually also pick up other callbacks. What I mean by this is that other kernel callbacks regarding thread execution, exception handling, or anything similar can be picked up via this callback.</p>
+<h2 id="important-registers-to-note">Important Registers to note<a hidden class="anchor" aria-hidden="true" href="#important-registers-to-note">#</a></h2>
+<ul>
+<li>Rax -&gt; Return of the function that was last called that&rsquo;s now trapped within the IC</li>
+<li>R10 -&gt; Origin of last function</li>
+<li>Rcx -&gt; Address of IC</li>
+</ul>
+<h2 id="kernel-callbacks-watchlist">Kernel Callbacks: Watchlist<a hidden class="anchor" aria-hidden="true" href="#kernel-callbacks-watchlist">#</a></h2>
+<p>Here, we need to discuss some of the kernel callbacks that we should know about, including why they&rsquo;re there and what they do. This information is important as it will help us understand exactly how code execution can be tracked.</p>
+<h3 id="kernel-callbacks-ldrinitializethunk">Kernel Callbacks: LdrInitializeThunk<a hidden class="anchor" aria-hidden="true" href="#kernel-callbacks-ldrinitializethunk">#</a></h3>
+<p>First on the list is LdrInitializeThunk. As you may already know, LdrInitializeThunk is crucial in thread creation. It initializes the thread in the context of the process and is mandatory. Any created thread&rsquo;s true start address is not the one the user specifies, but actually LdrInitializeThunk. With this knowledge, let&rsquo;s look at what C-like pseudocode for this function might look like.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-c" data-lang="c"><span style="display:flex;"><span>VOID
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">LdrInitializeThunk</span>(
+</span></span><span style="display:flex;"><span>	__in PCONTEXT Context,
+</span></span><span style="display:flex;"><span>	__in PVOID NtDllBaseAddress
+</span></span><span style="display:flex;"><span>	)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>	NTSTATUS Status;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#75715e">//
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>	<span style="color:#75715e">// Call LdrpInitialize to perform process or thread initialization tasks.
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>	<span style="color:#75715e">//
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">LdrpInitialize</span>(
+</span></span><span style="display:flex;"><span>		Context,
+</span></span><span style="display:flex;"><span>		NtDllBaseAddress
+</span></span><span style="display:flex;"><span>		);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#75715e">//
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>	<span style="color:#75715e">// Resume execution at the user-supplied thread context.
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>	<span style="color:#75715e">//
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>
+</span></span><span style="display:flex;"><span>	Status <span style="color:#f92672">=</span> <span style="color:#a6e22e">NtContinue</span>(
+</span></span><span style="display:flex;"><span>		Context,
+</span></span><span style="display:flex;"><span>		TRUE
+</span></span><span style="display:flex;"><span>		);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#75715e">//
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>	<span style="color:#75715e">// NtContinue should never return.
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>	<span style="color:#75715e">//
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">RtlRaiseStatus</span>( Status );
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">__debugbreak</span>();
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>Now that we know the thread&rsquo;s true start address is here and not where the user specified, we can apply some security analysis to explore how we can use this to prevent thread creation in a hook-less scenario. If the malicious actor has no idea we have an IC (Instrumentation Callback) installed, they&rsquo;d be completely oblivious to this form of analysis.</p>
+<h4 id="lockdown-ldrinitializethunk">Lockdown: LdrInitializeThunk<a hidden class="anchor" aria-hidden="true" href="#lockdown-ldrinitializethunk">#</a></h4>
+<p>Assuming we&rsquo;ve already got an IC (Instrumentation Callback) installed, we can do the following: Apply the knowledge we have of what registers hold which values. <strong>R10</strong> will be the syscall origin. If the origin is from LdrInitializeThunk, we can call a custom handler and validate whatever we need. Something like this:</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span><span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">qword</span> [<span style="color:#66d9ef">LdrInitializeThunk</span>], <span style="color:#66d9ef">r10</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">je</span> <span style="color:#66d9ef">some_ldr_init_thunk_checker</span>
+</span></span></code></pre></div><p>This will jump to our own custom handler before it returns to the end-user. In the handler, we can perform sanity checks on any newly created thread. These checks can be as trivial or as complex as you want them to be, as ideally we&rsquo;ll just need to check the start address for basics. We can use NtQueryInformationThread to get the start address. If it fails the sanity check, we can terminate the thread before it even executes.</p>
+<h3 id="kernel-callbacks-kiuserapcdispatcher">Kernel Callbacks: KiUserApcDispatcher<a hidden class="anchor" aria-hidden="true" href="#kernel-callbacks-kiuserapcdispatcher">#</a></h3>
+<p>To understand this callback, we first need to understand APCs. Essentially, APCs are added to a FIFO (First In, First Out) queue, and when a thread enters an alertable state, any APCs on the queue are executed one by one, with their respective APC routines being called. When this happens, underneath the hood, it&rsquo;s all handled within KiUserApcDispatcher. This function runs the APC and then eventually calls NtContinue in order to restore the original thread context. It sounds like we can lock down this function, doesn&rsquo;t it? Knowing that malicious actors can queue APCs in order to get code execution instead of creating their own thread, we need to secure this too.</p>
+<h4 id="lockdown-kiuserapcdispatcher">Lockdown: KiUserApcDispatcher<a hidden class="anchor" aria-hidden="true" href="#lockdown-kiuserapcdispatcher">#</a></h4>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span><span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">qword</span> [<span style="color:#66d9ef">KiUserApcDispatcher</span>], <span style="color:#66d9ef">r10</span> 
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">je</span> <span style="color:#66d9ef">some_apc_dispatcher_handler</span> 
+</span></span></code></pre></div><p>This is where it might get a little tricky. If we get this hit, it means that the APC has already been dispatched. To attempt to find whatever APC was just executed, we could use a method like stack tracing. Since we know that the APC has been dispatched to an alertable thread, we can iterate through all threads and create a stack backtrace for each. Then, we can check if anything within the stack leads to an area of memory that it shouldn&rsquo;t be within.</p>
+<h3 id="kernel-callbacks-kiuserexceptiondispatcher">Kernel Callbacks: KiUserExceptionDispatcher<a hidden class="anchor" aria-hidden="true" href="#kernel-callbacks-kiuserexceptiondispatcher">#</a></h3>
+<p>Essentially, this will be a bit tricky, but what this callback does is forward exceptions to any existing handler if it exists. In the context of our instrumentation callback, this could be seen as a middle ground between forwarding the exception and handling the exception. Imagine a scenario where we encrypt our pages and only decrypt them if they&rsquo;re accessed from a region that&rsquo;s created and managed by us, in other words, whitelisted. What we can do is only decrypt it if the access is valid - this is a little difficult without any parameters.</p>
+<h4 id="lockdown-kiuserexceptiondispatcher">Lockdown: KiUserExceptionDispatcher<a hidden class="anchor" aria-hidden="true" href="#lockdown-kiuserexceptiondispatcher">#</a></h4>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span><span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">qword</span> [<span style="color:#66d9ef">KiUserExceptionDispatcher</span>], <span style="color:#66d9ef">r10</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">je</span> <span style="color:#66d9ef">some_exception_handler</span>
+</span></span></code></pre></div><p>Once again, this is where it becomes a little tedious. Since we cannot access the original parameters and we&rsquo;re in the scenario of a &ldquo;We encrypt pages, let&rsquo;s make sure any calls to a whitelisted page that is currently encrypted are only decrypted if called from another whitelisted page&rdquo;. What we can do is, we know that the exception was created, let&rsquo;s only focus on access violations so we can just check the <strong>rax</strong> register, if it&rsquo;s an access violation code we can perform another stack trace. We can check that if the call to the whitelisted page or anything really within the stack trace is from outside a whitelisted page, we can just not let the exception be forwarded to the exception handler for decryption or however we setup our decryption sequence. This will leave the page encrypted and the exception unhandled. Here&rsquo;s an example of what the stack would look like (Top -&gt; Bottom)</p>
+<ul>
+<li>Instrumentation Callback &lt;&mdash;&mdash; us</li>
+<li>KiUserExceptionDispatcher &lt;&mdash;&mdash; the callback</li>
+<li>Exception Handling Frame</li>
+<li>Encrypted page &lt;&mdash;&mdash; where the exception was generated</li>
+<li>Malicious or non malicious page &lt;&mdash;&mdash; where the exception was generated from</li>
+<li>&hellip;.</li>
+</ul>
+<h2 id="instrumentation-callback-wave">Instrumentation Callback: Wave<a hidden class="anchor" aria-hidden="true" href="#instrumentation-callback-wave">#</a></h2>
+<p>So it begins. Here&rsquo;s a little debrief: Wave is a cheating tool used on Roblox. I found interest in it as it appears to be the largest paid cheating tool for Roblox at this moment in time. Although it&rsquo;s detected and the developers don&rsquo;t seem to care, I figured we might as well take a look at it. The instrumentation callback is quite large, so we&rsquo;ll split it into chunks in order to see what exactly it&rsquo;s doing and attempt to figure out what the actual core of the code execution derives from.</p>
+<h3 id="section-1-handling-callbacks">Section 1: Handling Callbacks<a hidden class="anchor" aria-hidden="true" href="#section-1-handling-callbacks">#</a></h3>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span>    <span style="color:#a6e22e">pushfq</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">push</span> <span style="color:#66d9ef">rdx</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">lea</span> <span style="color:#66d9ef">rdx</span>, [<span style="color:#66d9ef">some_structure</span>]
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">rcx</span>, <span style="color:#66d9ef">QWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">8</span>] 
+</span></span><span style="display:flex;"><span>	<span style="color:#66d9ef">cmove</span> <span style="color:#66d9ef">rcx</span>, <span style="color:#66d9ef">QWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">some_structure</span>]
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">r10</span>, <span style="color:#66d9ef">QWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">018</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">je</span> <span style="color:#66d9ef">skip_path</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">r10</span>, <span style="color:#66d9ef">QWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">020</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">je</span> <span style="color:#66d9ef">skip_path</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">r10</span>, <span style="color:#66d9ef">QWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">028</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">je</span> <span style="color:#66d9ef">skip_path</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">r10</span>, <span style="color:#66d9ef">QWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">010</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">je</span> <span style="color:#66d9ef">handle_exception</span>
+</span></span></code></pre></div><p>In this section of assembly, we can see quite a few things happening. Just to note, this is the start and this is where we&rsquo;re going to be analysing this foreign structure that they seem to initialise before creating this callback. We can tell that <strong>rdx + 8</strong> will be <strong>their instrumentation callback address</strong>, I analysed the next few offsets dynamically, here is what the structure looks thus far.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span><span style="color:#75715e">; +0 -&gt; roblox instrumentation callback address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +8 -&gt; wave instrumentation callback address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +10 -&gt; KiUserExceptionDispatcher address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +18 -&gt; LdrInitializeThunk address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +20 -&gt; KiUserApcDispatcher address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +28 -&gt; KiUserCallbackDispatcher address (?)
+</span></span></span></code></pre></div><p>The code so far is pretty simple, looks like anything that isn&rsquo;t an exception should just be ignored so far, this is typical because we know that Roblox will strip any allocation that has the execution protection if it&rsquo;s not whitelisted. Once an exception occurs (attempted execution in non whitelisted page), Wave&rsquo;s handler will take over. What&rsquo;s interesting to see is that LdrInitializeThunk is ignored, this suggests that wave is not creating their own thread or queuing an APC.</p>
+<p>Another thing to note is, the instructions</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span>    <span style="color:#a6e22e">lea</span> <span style="color:#66d9ef">rdx</span>, [<span style="color:#66d9ef">some_structure</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">rcx</span>, <span style="color:#66d9ef">QWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">8</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">cmove</span> <span style="color:#66d9ef">rcx</span>, <span style="color:#66d9ef">QWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">some_structure</span>]
+</span></span></code></pre></div><p>This is actually interesting, this let&rsquo;s us realise that what they&rsquo;re doing is installing their instrumentation callback and actually just jmping to roblox&rsquo;s original callback immediately after they&rsquo;re done, that&rsquo;s where <strong>skip_path</strong> comes into play.</p>
+<p>The reason they&rsquo;re setting rcx to roblox&rsquo;s instrumentation callback is because, as noted earlier, RCX will contain the instrumentation callback address, Roblox (as shown later on) verify if the RCX register holds roblox&rsquo;s instrumentation callback or not, these instructions in wave will help pass that check (if you could call it one).</p>
+<p>The Pseudolike representation of these instructions so far are something along the lines of this</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-c" data-lang="c"><span style="display:flex;"><span><span style="color:#66d9ef">void</span> <span style="color:#a6e22e">ic</span>() {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (rcx <span style="color:#f92672">==</span> some_structure<span style="color:#f92672">-&gt;</span>wave_ic)
+</span></span><span style="display:flex;"><span>        rcx <span style="color:#f92672">=</span> some_structure<span style="color:#f92672">-&gt;</span>roblox_ic;
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">/* 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">    ignored_functions_map = {
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">        some_structure-&gt;LdrInitializeThunk, 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">        some_structure-&gt;KiUserCallbackDispatcher, 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">        some_structure-&gt;KiUserApcDispatcher
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">    }
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">    */</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (ignored_functions_map.<span style="color:#a6e22e">find</span>(r10) <span style="color:#f92672">!=</span> ignored_functions_map.<span style="color:#a6e22e">end</span>())
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> skip_path; 
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">else</span> <span style="color:#66d9ef">if</span> (r10 <span style="color:#f92672">==</span> some_structure<span style="color:#f92672">-&gt;</span>KiUserExceptionDispatcher)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> handle_exception;
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">//....
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>}
+</span></span></code></pre></div><h3 id="section-2-initialisation">Section 2: Initialisation<a hidden class="anchor" aria-hidden="true" href="#section-2-initialisation">#</a></h3>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">eax</span>, <span style="color:#ae81ff">0</span><span style="color:#66d9ef">C000001Ch</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">je</span> <span style="color:#66d9ef">set_rax_to_zero</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">eax</span>, <span style="color:#ae81ff">0124</span><span style="color:#66d9ef">h</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">je</span> <span style="color:#66d9ef">isprocessinjobcheck</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">push</span> <span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rax</span>, <span style="color:#66d9ef">rsp</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rdx</span>, <span style="color:#66d9ef">gs</span>:[<span style="color:#ae81ff">030</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rdx</span>, [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">010</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">sub</span> <span style="color:#66d9ef">rax</span>, <span style="color:#ae81ff">4</span><span style="color:#66d9ef">D0h</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">and</span> <span style="color:#66d9ef">rax</span>, -<span style="color:#ae81ff">16</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">sub</span> <span style="color:#66d9ef">rax</span>, <span style="color:#ae81ff">060</span><span style="color:#66d9ef">h</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">rax</span>, <span style="color:#66d9ef">rdx</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">jb</span> <span style="color:#66d9ef">skip_path_copy</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rdx</span>, <span style="color:#66d9ef">gs</span>:[<span style="color:#ae81ff">030</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">edx</span>, <span style="color:#66d9ef">DWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">016</span><span style="color:#66d9ef">B4h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">edx</span>, <span style="color:#66d9ef">DWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">some_structure</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0560</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">jne</span> <span style="color:#66d9ef">set_debug_registers</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">lea</span> <span style="color:#66d9ef">rdx</span>, [<span style="color:#66d9ef">some_structure</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">xor</span> <span style="color:#66d9ef">rax</span>, <span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">eax</span>, <span style="color:#66d9ef">DWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">038</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">eax</span>, <span style="color:#ae81ff">1</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">jne</span> <span style="color:#66d9ef">skip_path_copy</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">xor</span> <span style="color:#66d9ef">rax</span>, <span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">lock</span> <span style="color:#a6e22e">xchg</span> <span style="color:#66d9ef">DWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">038</span><span style="color:#66d9ef">h</span>], <span style="color:#66d9ef">eax</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">eax</span>, <span style="color:#ae81ff">1</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">jne</span> <span style="color:#66d9ef">skip_path_copy</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">pop</span> <span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">pop</span> <span style="color:#66d9ef">rdx</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">popfq</span>
+</span></span></code></pre></div><p>A lot to unpack here, let&rsquo;s begin by splitting it into even more chunks, the first chunk we&rsquo;ll be looking at is the first two comparisons.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span>    <span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">eax</span>, <span style="color:#ae81ff">0</span><span style="color:#66d9ef">C000001Ch</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">je</span> <span style="color:#66d9ef">set_rax_to_zero</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">eax</span>, <span style="color:#ae81ff">0124</span><span style="color:#66d9ef">h</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">je</span> <span style="color:#66d9ef">spoof_job</span>
+</span></span></code></pre></div><p>Looks like we&rsquo;re dealing with some NTSTATUS returns, the first one sets any invalid calls return to zero(hence the name), the second one appears to replace the value of eax to spoof a job to appear as though it&rsquo;s not running, this is what makes me believe there is something important going on here exactly.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span>	<span style="color:#a6e22e">push</span> <span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rax</span>, <span style="color:#66d9ef">rsp</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rdx</span>, <span style="color:#66d9ef">gs</span>:[<span style="color:#ae81ff">030</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rdx</span>, [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">010</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">sub</span> <span style="color:#66d9ef">rax</span>, <span style="color:#ae81ff">4</span><span style="color:#66d9ef">D0h</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">and</span> <span style="color:#66d9ef">rax</span>, -<span style="color:#ae81ff">16</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">sub</span> <span style="color:#66d9ef">rax</span>, <span style="color:#ae81ff">060</span><span style="color:#66d9ef">h</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">rax</span>, <span style="color:#66d9ef">rdx</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">jb</span> <span style="color:#66d9ef">skip_path_copy</span>
+</span></span></code></pre></div><p>This just appears to be some sort of stack limit check vs stack pointer, not too sure entirely what&rsquo;s going on here but it seems to be a deciding factor if they should ignore it.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rdx</span>, <span style="color:#66d9ef">gs</span>:[<span style="color:#ae81ff">030</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">edx</span>, <span style="color:#66d9ef">DWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">016</span><span style="color:#66d9ef">B4h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">edx</span>, <span style="color:#66d9ef">DWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">some_structure</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0560</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">jne</span> <span style="color:#66d9ef">set_debug_registers</span>
+</span></span></code></pre></div><p>This is an important part, this checks the error code of the current thread and compares it with a field in the self-made structure, this appears to be some indicator in order to set the debug registers, the branch is named accordingly. The new structure will be posted at the bottom.</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span>    <span style="color:#a6e22e">lea</span> <span style="color:#66d9ef">rdx</span>, [<span style="color:#66d9ef">some_structure</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">xor</span> <span style="color:#66d9ef">rax</span>, <span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">eax</span>, <span style="color:#66d9ef">DWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">038</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">eax</span>, <span style="color:#ae81ff">1</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">jne</span> <span style="color:#66d9ef">skip_path_copy</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">xor</span> <span style="color:#66d9ef">rax</span>, <span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">lock</span> <span style="color:#a6e22e">xchg</span> <span style="color:#66d9ef">DWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rdx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">038</span><span style="color:#66d9ef">h</span>], <span style="color:#66d9ef">eax</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">eax</span>, <span style="color:#ae81ff">1</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">jne</span> <span style="color:#66d9ef">skip_path_copy</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">pop</span> <span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">pop</span> <span style="color:#66d9ef">rdx</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">popfq</span>
+</span></span></code></pre></div><p>This part is pretty straight forward, it just appears to be checking a flag to see if the initialisation is complete, remember this is ran on every single thread so there is most definitely a scenario where this is currently being initialised. lock xchg is an atomic instruction set that will 100% execute uninterrupted.</p>
+<p>The updated structure appears as follows</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span><span style="color:#75715e">; +0 -&gt; roblox instrumentation callback address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +8 -&gt; wave instrumentation callback address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +10 -&gt; KiUserExceptionDispatcher address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +18 -&gt; LdrInitializeThunk address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +20 -&gt; KiUserApcDispatcher address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +28 -&gt; KiUserCallbackDispatcher address (?)
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +30 -&gt; ?
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +38 -&gt; initialised flag address
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +60 -&gt; thread context
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">...</span>
+</span></span><span style="display:flex;"><span><span style="color:#75715e">; +560 -&gt; debug registers code to reset
+</span></span></span></code></pre></div><p>The updated pseudocode is as follows</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-c" data-lang="c"><span style="display:flex;"><span><span style="color:#66d9ef">void</span> <span style="color:#a6e22e">ic</span>() {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (rcx <span style="color:#f92672">==</span> some_structure<span style="color:#f92672">-&gt;</span>wave_ic)
+</span></span><span style="display:flex;"><span>        rcx <span style="color:#f92672">=</span> some_structure<span style="color:#f92672">-&gt;</span>roblox_ic;
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">/* 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">    ignored_functions_map = {
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">        some_structure-&gt;LdrInitializeThunk, 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">        some_structure-&gt;KiUserCallbackDispatcher, 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">        some_structure-&gt;KiUserApcDispatcher
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">    }
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">    */</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (ignored_functions_map.<span style="color:#a6e22e">find</span>(r10) <span style="color:#f92672">!=</span> ignored_functions_map.<span style="color:#a6e22e">end</span>())
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> skip_path; 
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">else</span> <span style="color:#66d9ef">if</span> (r10 <span style="color:#f92672">==</span> some_structure<span style="color:#f92672">-&gt;</span>KiUserExceptionDispatcher)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> handle_exception;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">uint32_t</span> eax <span style="color:#f92672">=</span> (<span style="color:#66d9ef">uint32_t</span>)rax;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (eax <span style="color:#f92672">==</span> <span style="color:#ae81ff">0xC000001c</span>) 
+</span></span><span style="display:flex;"><span>        <span style="color:#f92672">*</span>rax <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">else</span> <span style="color:#66d9ef">if</span> (eax <span style="color:#f92672">=</span> <span style="color:#ae81ff">0x124</span>)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> spoof_job;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (stack_pointer <span style="color:#f92672">&lt;</span> thread_stack_limit)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> skip_path_copy;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (thread_error_mode <span style="color:#f92672">!=</span> some_structure<span style="color:#f92672">-&gt;</span>reset_hwbp_code)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> set_debug_registers;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (some_structure<span style="color:#f92672">-&gt;</span>initialised <span style="color:#f92672">==</span> <span style="color:#ae81ff">1</span>)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> skip_path_copy;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">//do atomically 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>    some_structure<span style="color:#f92672">-&gt;</span>initialised <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><h3 id="section-3-code-execution">Section 3: Code execution<a hidden class="anchor" aria-hidden="true" href="#section-3-code-execution">#</a></h3>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">sub</span> <span style="color:#66d9ef">rsp</span>, <span style="color:#ae81ff">8</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">QWORD</span> <span style="color:#66d9ef">PTR</span> [<span style="color:#66d9ef">rsp</span>], <span style="color:#ae81ff">0</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rcx</span>, <span style="color:#66d9ef">rsp</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rdx</span>, <span style="color:#66d9ef">qword</span> <span style="color:#66d9ef">ptr</span> [<span style="color:#66d9ef">some_structure</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0530</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">r8</span>, <span style="color:#66d9ef">qword</span> <span style="color:#66d9ef">ptr</span> [<span style="color:#66d9ef">some_structure</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0548</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">xor</span> <span style="color:#66d9ef">r9</span>, <span style="color:#66d9ef">r9</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rax</span>, <span style="color:#66d9ef">qword</span> <span style="color:#66d9ef">ptr</span> [<span style="color:#66d9ef">some_structure</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0538</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">sub</span> <span style="color:#66d9ef">rsp</span>, <span style="color:#ae81ff">20</span><span style="color:#66d9ef">h</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">call</span> <span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">add</span> <span style="color:#66d9ef">rsp</span>, <span style="color:#ae81ff">20</span><span style="color:#66d9ef">h</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">test</span> <span style="color:#66d9ef">eax</span>, <span style="color:#66d9ef">eax</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">js</span> <span style="color:#66d9ef">push_rsp_by_8</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#a6e22e">pop</span> <span style="color:#66d9ef">rcx</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rax</span>, <span style="color:#66d9ef">qword</span> <span style="color:#66d9ef">ptr</span> [<span style="color:#66d9ef">some_structure</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0540</span><span style="color:#66d9ef">h</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">sub</span> <span style="color:#66d9ef">rsp</span>, <span style="color:#ae81ff">28</span><span style="color:#66d9ef">h</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">call</span> <span style="color:#66d9ef">rax</span> <span style="color:#75715e">; TpPostWork
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>    <span style="color:#a6e22e">add</span> <span style="color:#66d9ef">rsp</span>, <span style="color:#ae81ff">28</span><span style="color:#66d9ef">h</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">jmp</span> <span style="color:#66d9ef">restore_context</span>
+</span></span></code></pre></div><p>Finally, something interesting. It appears like we have two function calls. I went and traced to see what the functions are and they appear to be <strong>TpAllocWork</strong> and <strong>TpPostWork</strong>, interesting isn&rsquo;t it? makes sense with the earlier check previously. Let&rsquo;s deserialise the arguments and add it to the memory structure properly.</p>
+<p>The updated structure appears as follows</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span><span style="color:#75715e">; +0 -&gt; roblox instrumentation callback address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +8 -&gt; wave instrumentation callback address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +10 -&gt; KiUserExceptionDispatcher address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +18 -&gt; LdrInitializeThunk address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +20 -&gt; KiUserApcDispatcher address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +28 -&gt; KiUserCallbackDispatcher address (?)
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +30 -&gt; ?
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +38 -&gt; initialised flag address
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +60 -&gt; thread context
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">...</span>
+</span></span><span style="display:flex;"><span><span style="color:#75715e">; +530 -&gt; work thread address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +538 -&gt; TpAllocWork address 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +540 -&gt; TpPostWork addresss
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +548 -&gt; callback address (?)
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; +560 -&gt; debug registers code to reset
+</span></span></span></code></pre></div><p>The updated pseudocode is as follows</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-c" data-lang="c"><span style="display:flex;"><span><span style="color:#66d9ef">void</span> <span style="color:#a6e22e">ic</span>() {
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (rcx <span style="color:#f92672">==</span> some_structure<span style="color:#f92672">-&gt;</span>wave_ic)
+</span></span><span style="display:flex;"><span>        rcx <span style="color:#f92672">=</span> some_structure<span style="color:#f92672">-&gt;</span>roblox_ic;
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">/* 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">    ignored_functions_map = {
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">        some_structure-&gt;LdrInitializeThunk, 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">        some_structure-&gt;KiUserCallbackDispatcher, 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">        some_structure-&gt;KiUserApcDispatcher
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">    }
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">    */</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (ignored_functions_map.<span style="color:#a6e22e">find</span>(r10) <span style="color:#f92672">!=</span> ignored_functions_map.<span style="color:#a6e22e">end</span>())
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> skip_path; 
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">else</span> <span style="color:#66d9ef">if</span> (r10 <span style="color:#f92672">==</span> some_structure<span style="color:#f92672">-&gt;</span>KiUserExceptionDispatcher)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> handle_exception;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">uint32_t</span> eax <span style="color:#f92672">=</span> (<span style="color:#66d9ef">uint32_t</span>)rax;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (eax <span style="color:#f92672">==</span> <span style="color:#ae81ff">0xC000001c</span>) 
+</span></span><span style="display:flex;"><span>        <span style="color:#f92672">*</span>rax <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">else</span> <span style="color:#66d9ef">if</span> (eax <span style="color:#f92672">=</span> <span style="color:#ae81ff">0x124</span>)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> spoof_job;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (stack_pointer <span style="color:#f92672">&lt;</span> thread_stack_limit)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> skip_path_copy;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (thread_error_mode <span style="color:#f92672">!=</span> some_structure<span style="color:#f92672">-&gt;</span>reset_hwbp_code)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> set_debug_registers;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (some_structure<span style="color:#f92672">-&gt;</span>initialised <span style="color:#f92672">==</span> <span style="color:#ae81ff">1</span>)
+</span></span><span style="display:flex;"><span>        <span style="color:#66d9ef">goto</span> skip_path_copy;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">//do atomically 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>    some_structure<span style="color:#f92672">-&gt;</span>initialised <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span>;
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    T work <span style="color:#f92672">=</span> <span style="color:#a6e22e">T</span>();
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">auto</span> result <span style="color:#f92672">=</span> <span style="color:#a6e22e">TpAllocWork</span>(<span style="color:#f92672">&amp;</span>work, some_structure<span style="color:#f92672">-&gt;</span>work_thread, some_structure<span style="color:#f92672">-&gt;</span>callback, <span style="color:#ae81ff">0</span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#66d9ef">if</span> (result <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">0</span>)
+</span></span><span style="display:flex;"><span>        <span style="color:#75715e">// add rsp by 8 and return 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#a6e22e">TpPostWork</span>(work);
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">//return 
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>}
+</span></span></code></pre></div><h3 id="section-4-page-deryption">Section 4: Page deryption<a hidden class="anchor" aria-hidden="true" href="#section-4-page-deryption">#</a></h3>
+<p>No assembly here as it&rsquo;s extremely trivial. After encountering an exception, Wave will check if it&rsquo;s an access violation or if it&rsquo;s a single step code. If it&rsquo;s an access violation it will just call Roblox&rsquo;s default page decryptor function. If it&rsquo;s a hardware breakpoint, it&rsquo;ll check what index of the debug register was triggered, if it&rsquo;s 2, it&rsquo;ll set rax to zero, if it&rsquo;s 4 it&rsquo;ll call a separate function which whil thwart with query virtual memory in order to attempt to hide their allocation by modifying their allocation entry within the hyperion blacklist. Index 8 will skip HWBP detections.</p>
+<h3 id="section-5-recap">Section 5: Recap<a hidden class="anchor" aria-hidden="true" href="#section-5-recap">#</a></h3>
+<p>Well, that&rsquo;s pretty much all there is for Wave, it seems they&rsquo;re just using cheap tricks to get by and honestly - it&rsquo;s somewhat impressive but still disappointing that it&rsquo;s almost like a ducktaped method, cheap tricks never last. We&rsquo;ve now analysed exactly how they keep their allocation &ldquo;safe&rdquo;(?) and how they&rsquo;re executing code.</p>
+<h2 id="instrumentation-callback-hyperion">Instrumentation Callback: Hyperion<a hidden class="anchor" aria-hidden="true" href="#instrumentation-callback-hyperion">#</a></h2>
+<p>Onto Hyperion, Hyperion has a really strong implementation of a well written and smart Instrumentation Callback, it only appears to target three callbacks and all three are ones already discussed in this blog, I didn&rsquo;t just ramble about those callbacks for no reason. I apologise ahead of time that this area will be a little bare as compared with wave, this is because of the heavy obfuscation within Hyperion. Luckily, I&rsquo;ve already annotated the main premise of the instrumentation callback, let&rsquo;s check it out.</p>
+<h3 id="section-1-the-instrumentation-callback">Section 1: The Instrumentation Callback<a hidden class="anchor" aria-hidden="true" href="#section-1-the-instrumentation-callback">#</a></h3>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span><span style="color:#75715e">; preserve_registers
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">push</span> <span style="color:#66d9ef">r10</span> <span style="color:#75715e">; syscall origin
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">push</span> <span style="color:#66d9ef">rax</span> <span style="color:#75715e">; syscall return
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">pushfq</span> 
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">push</span> <span style="color:#66d9ef">rbx</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rbx</span>,<span style="color:#66d9ef">rsp</span> <span style="color:#75715e">; store original stack pointer
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>
+</span></span><span style="display:flex;"><span><span style="color:#75715e">; check if rcx contains address of ic (it always should (?))
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">lea</span> <span style="color:#66d9ef">rax</span>,[<span style="color:#66d9ef">RobloxPlayerBeta.dll</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#66d9ef">C4A0A0</span>] <span style="color:#960050;background-color:#1e0010">{</span> (-<span style="color:#ae81ff">1672457663</span>) <span style="color:#960050;background-color:#1e0010">}</span> <span style="color:#75715e">; set rax to start of IC
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">cmp</span> <span style="color:#66d9ef">rcx</span>,<span style="color:#66d9ef">rax</span> <span style="color:#75715e">; Check if shellcode is the hardcoded start of what it should be ?
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">cmove</span> <span style="color:#66d9ef">rcx</span>,<span style="color:#66d9ef">r10</span> <span style="color:#75715e">; set rcx to the syscall origin (where it was invoked)
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>
+</span></span><span style="display:flex;"><span><span style="color:#75715e">; Allocate 0xC0 bytes onto stack &amp; align to 16 byte boundary
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">lea</span> <span style="color:#66d9ef">r10</span>,[<span style="color:#66d9ef">rsp-000000C0</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">and</span> <span style="color:#66d9ef">r10</span>,-<span style="color:#ae81ff">10</span> <span style="color:#960050;background-color:#1e0010">{</span> <span style="color:#ae81ff">240</span> <span style="color:#960050;background-color:#1e0010">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rsp</span>,<span style="color:#66d9ef">r10</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">cld</span> 
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#75715e">; Store registers onto allocated memory (some sort of stack struct)
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">mov</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">000000</span><span style="color:#66d9ef">B0</span>],<span style="color:#66d9ef">rcx</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">000000</span><span style="color:#66d9ef">A8</span>],<span style="color:#66d9ef">rdx</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">000000</span><span style="color:#66d9ef">A0</span>],<span style="color:#66d9ef">r8</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">00000098</span>],<span style="color:#66d9ef">r9</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">00000090</span>],<span style="color:#66d9ef">r11</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">00000080</span>],<span style="color:#66d9ef">xmm0</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">70</span>],<span style="color:#66d9ef">xmm1</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">60</span>],<span style="color:#66d9ef">xmm2</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">50</span>],<span style="color:#66d9ef">xmm3</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">40</span>],<span style="color:#66d9ef">xmm4</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">30</span>],<span style="color:#66d9ef">xmm5</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rcx</span>,[<span style="color:#66d9ef">rbx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">18</span>] <span style="color:#75715e">; rcx = rip
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">; rcx = first param, don&#39;t see anything regarding a rdx for the second param
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">call</span> <span style="color:#66d9ef">RobloxPlayerBeta.dll</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">14</span><span style="color:#66d9ef">AF110</span> <span style="color:#75715e">; from what i can see, this will verify the RIP
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>
+</span></span><span style="display:flex;"><span><span style="color:#75715e">; set rip to new return from call &amp; restore all registers
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">mov</span> [<span style="color:#66d9ef">rbx</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">18</span>],<span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rcx</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">000000</span><span style="color:#66d9ef">B0</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rdx</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">000000</span><span style="color:#66d9ef">A8</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">r8</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">000000</span><span style="color:#66d9ef">A0</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">r9</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">00000098</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">r11</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">00000090</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> <span style="color:#66d9ef">xmm0</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">00000080</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> <span style="color:#66d9ef">xmm1</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">70</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> <span style="color:#66d9ef">xmm2</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">60</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> <span style="color:#66d9ef">xmm3</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">50</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> <span style="color:#66d9ef">xmm4</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">40</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movaps</span> <span style="color:#66d9ef">xmm5</span>,[<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">30</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span> <span style="color:#66d9ef">rsp</span>,<span style="color:#66d9ef">rbx</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">pop</span> <span style="color:#66d9ef">rbx</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">popfq</span> 
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">pop</span> <span style="color:#66d9ef">rax</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">pop</span> <span style="color:#66d9ef">r10</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">jmp</span> <span style="color:#66d9ef">r10</span> <span style="color:#75715e">; return to code (modified or original, depending on verifier call)
+</span></span></span></code></pre></div><p>Seems pretty straight forward and well written as compared to the previous, it&rsquo;s actually intersting to see. The only parameter that&rsquo;s passed to the function is rip (r10), this is where all the main handlers and checks are.</p>
+<h3 id="section-2-the-verifier">Section 2: The Verifier<a hidden class="anchor" aria-hidden="true" href="#section-2-the-verifier">#</a></h3>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span><span style="color:#a6e22e">push</span>    <span style="color:#66d9ef">rbp</span> 
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">push</span>    <span style="color:#66d9ef">r15</span> 
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">push</span>    <span style="color:#66d9ef">r14</span> 
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">push</span>    <span style="color:#66d9ef">r13</span> 
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">push</span>    <span style="color:#66d9ef">r12</span> 
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">push</span>    <span style="color:#66d9ef">rsi</span> 
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">push</span>    <span style="color:#66d9ef">rdi</span> 
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">push</span>    <span style="color:#66d9ef">rbx</span> 
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#66d9ef">sub</span>     <span style="color:#66d9ef">rsp</span>, <span style="color:#ae81ff">0x5f8</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">lea</span>     <span style="color:#66d9ef">rbp</span>, [<span style="color:#66d9ef">rsp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0x80</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span>     <span style="color:#66d9ef">qword</span> [<span style="color:#66d9ef">rbp</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0x570</span>], <span style="color:#ae81ff">0xfffffffffffffffe</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span>     <span style="color:#66d9ef">rsi</span>, <span style="color:#66d9ef">rcx</span>  <span style="color:#75715e">; rsi = syscall origin
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span><span style="color:#a6e22e">mov</span>     <span style="color:#66d9ef">r8</span>, <span style="color:#66d9ef">qword</span> [<span style="color:#66d9ef">gs</span>:<span style="color:#ae81ff">0x30</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">movzx</span>   <span style="color:#66d9ef">eax</span>, <span style="color:#66d9ef">byte</span> [<span style="color:#66d9ef">r8</span><span style="color:#960050;background-color:#1e0010">+</span><span style="color:#ae81ff">0x2ec</span>]
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">test</span>    <span style="color:#66d9ef">al</span>, <span style="color:#ae81ff">0x1</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">jne</span>     <span style="color:#66d9ef">InstrumentationDisabled</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">mov</span>     <span style="color:#66d9ef">rdi</span>, <span style="color:#66d9ef">qword</span> [<span style="color:#66d9ef">r8</span> <span style="color:#960050;background-color:#1e0010">{</span><span style="color:#66d9ef">_TEB</span>::<span style="color:#66d9ef">NtTib.ExceptionList</span><span style="color:#960050;background-color:#1e0010">}</span>]
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">cmp</span>     <span style="color:#66d9ef">qword</span> [<span style="color:#66d9ef">rel</span> <span style="color:#66d9ef">KiUserExceptionDispatcher</span>], <span style="color:#66d9ef">rsi</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">je</span>      <span style="color:#66d9ef">Return$sub_7ffd2af6a060</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">cmp</span>     <span style="color:#66d9ef">qword</span> [<span style="color:#66d9ef">rel</span> <span style="color:#66d9ef">LdrInitializeThunk</span>], <span style="color:#66d9ef">rsi</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">je</span>      <span style="color:#66d9ef">Return$sub_7ffd2af6a180</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">cmp</span>     <span style="color:#66d9ef">qword</span> [<span style="color:#66d9ef">rel</span> <span style="color:#66d9ef">KiUserApcDispatcher</span>], <span style="color:#66d9ef">rsi</span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">je</span>      <span style="color:#66d9ef">Return$sub_7ffd2af6a170</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#a6e22e">jmp</span>     <span style="color:#66d9ef">Return$DisableIC</span>
+</span></span></code></pre></div><p>As we can see, there are three setup handlers for each of those 3 important callbacks, it&rsquo;s here where they perform all the sanity checks on what should and should not happen, unfortunately I cannot show in detail what type of sanity checks they do but they are very thorough - especailly for the creation of threads. Each of those function handlers are, in what appears to be, hooked tailcalls.</p>
+<h3 id="section-3-post-verifier">Section 3: Post-verifier<a hidden class="anchor" aria-hidden="true" href="#section-3-post-verifier">#</a></h3>
+<p>After the verification is finished, a modified (or original) r10 is returned, it&rsquo;s from here that decides whether to continue or not to in terms of whatever path of execution is currently happening.</p>
+<h3 id="section-4-recap">Section 4: Recap<a hidden class="anchor" aria-hidden="true" href="#section-4-recap">#</a></h3>
+<p>So, it just appears that Hyperions implementation of an instrumentation callback is strictly for prevention of code execution as well as handling any exceptions raised in whatever allocation there may be.</p>
+<h2 id="conclusion">Conclusion<a hidden class="anchor" aria-hidden="true" href="#conclusion">#</a></h2>
+<p>Thank you very much for reading, I mean no disrespect to either sides of the parties involved in this blog. I&rsquo;m a very curious person and decided to try and figure something new out. I do apologise for any incorrect information that may be present here, everything I&rsquo;ve written is all hypothetical in a sense. Please reach out to me if you&rsquo;ve got any issues within this blog or want to correct a mistake.</p>
+<h2 id="references">References<a hidden class="anchor" aria-hidden="true" href="#references">#</a></h2>
+<p><a href="http://www.nynaeve.net/Code/LdrInitializeThunk.c">C-Like representation of LdrInitializeThunk</a></p>
+
+
+  </div>
+
+  <footer class="post-footer">
+    <ul class="post-tags">
+    </ul>
+  </footer>
+</article>
+    </main>
+    
+<footer class="footer">
+        <span>&copy; 2024 <a href="https://dx9.uk/">dx9</a></span> · 
+
+    <span>
+        Powered by
+        <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
+        <a href="https://github.com/adityatelange/hugo-PaperMod/" rel="noopener" target="_blank">PaperMod</a>
+    </span>
+</footer>
+<a href="#top" aria-label="go to top" title="Go to Top (Alt + G)" class="top-link" id="top-link" accesskey="g">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentColor">
+        <path d="M12 6H0l6-6z" />
+    </svg>
+</a>
+
+<script>
+    let menu = document.getElementById('menu')
+    if (menu) {
+        menu.scrollLeft = localStorage.getItem("menu-scroll-position");
+        menu.onscroll = function () {
+            localStorage.setItem("menu-scroll-position", menu.scrollLeft);
+        }
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+            var id = this.getAttribute("href").substr(1);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({
+                    behavior: "smooth"
+                });
+            } else {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();
+            }
+            if (id === "top") {
+                history.replaceState(null, null, " ");
+            } else {
+                history.pushState(null, null, `#${id}`);
+            }
+        });
+    });
+
+</script>
+<script>
+    var mybutton = document.getElementById("top-link");
+    window.onscroll = function () {
+        if (document.body.scrollTop > 800 || document.documentElement.scrollTop > 800) {
+            mybutton.style.visibility = "visible";
+            mybutton.style.opacity = "1";
+        } else {
+            mybutton.style.visibility = "hidden";
+            mybutton.style.opacity = "0";
+        }
+    };
+
+</script>
+<script>
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+        if (document.body.className.includes("dark")) {
+            document.body.classList.remove('dark');
+            localStorage.setItem("pref-theme", 'light');
+        } else {
+            document.body.classList.add('dark');
+            localStorage.setItem("pref-theme", 'dark');
+        }
+    })
+
+</script>
+</body>
+
+</html>
