@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en" dir="auto">
+
+<head><meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<meta name="robots" content="index, follow">
+<title>Lazy Importer | dx9</title>
+<meta name="keywords" content="">
+<meta name="description" content="A blog about reverse engineering a Lazy Importer">
+<meta name="author" content="dx9">
+<link rel="canonical" href="https://dx9.uk/posts/lazy-importer/">
+<link crossorigin="anonymous" href="/assets/css/stylesheet.54405a410796490bc874ab6181fac9b675753cc2b91375d8f882566459eca428.css" integrity="sha256-VEBaQQeWSQvIdKthgfrJtnV1PMK5E3XY&#43;IJWZFnspCg=" rel="preload stylesheet" as="style">
+<link rel="icon" href="https://dx9.uk/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="https://dx9.uk/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="https://dx9.uk/favicon-32x32.png">
+<link rel="apple-touch-icon" href="https://dx9.uk/apple-touch-icon.png">
+<link rel="mask-icon" href="https://dx9.uk/safari-pinned-tab.svg">
+<meta name="theme-color" content="#2e2e33">
+<meta name="msapplication-TileColor" content="#2e2e33">
+<link rel="alternate" hreflang="en" href="https://dx9.uk/posts/lazy-importer/">
+<noscript>
+    <style>
+        #theme-toggle,
+        .top-link {
+            display: none;
+        }
+
+    </style>
+    <style>
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --theme: rgb(29, 30, 32);
+                --entry: rgb(46, 46, 51);
+                --primary: rgb(218, 218, 219);
+                --secondary: rgb(155, 156, 157);
+                --tertiary: rgb(65, 66, 68);
+                --content: rgb(196, 196, 197);
+                --code-block-bg: rgb(46, 46, 51);
+                --code-bg: rgb(55, 56, 62);
+                --border: rgb(51, 51, 51);
+            }
+
+            .list {
+                background: var(--theme);
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-track {
+                background: 0 0;
+            }
+
+            .list:not(.dark)::-webkit-scrollbar-thumb {
+                border-color: var(--theme);
+            }
+        }
+
+    </style>
+</noscript><meta property="og:title" content="Lazy Importer" />
+<meta property="og:description" content="A blog about reverse engineering a Lazy Importer" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="https://dx9.uk/posts/lazy-importer/" /><meta property="article:section" content="posts" />
+<meta property="article:published_time" content="2025-03-26T14:16:21+01:00" />
+<meta property="article:modified_time" content="2025-03-26T14:16:21+01:00" />
+
+<meta name="twitter:card" content="summary"/>
+<meta name="twitter:title" content="Lazy Importer"/>
+<meta name="twitter:description" content="A blog about reverse engineering a Lazy Importer"/>
+
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {
+      "@type": "ListItem",
+      "position":  1 ,
+      "name": "Posts",
+      "item": "https://dx9.uk/posts/"
+    }, 
+    {
+      "@type": "ListItem",
+      "position":  2 ,
+      "name": "Lazy Importer",
+      "item": "https://dx9.uk/posts/lazy-importer/"
+    }
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Lazy Importer",
+  "name": "Lazy Importer",
+  "description": "A blog about reverse engineering a Lazy Importer",
+  "keywords": [
+    
+  ],
+  "articleBody": "Introduction Hello, today we’ll be looking at how we can reverse engineer a lazy importer with a real life example. I’ll be using Roblox’s Hyperion as a base to reverse engineer as their implementation is a little bit different to how they’re normally implemented.\nBackground information To begin, we’ll need to know what a lazy importer really is and what its use case is. A lazy importer will essentially create small stubs of code that will find a specific function that you’re looking to call and allow you to invoke it while also masking it from the import descriptor. When you have access to the import table of a binary file, it makes life easier to reverse engineer that file because we’d be able to directly see all xrefs (cross references) and understand exactly what’s going on in a good handful of places - this is very helpful when working against some form of anti-cheat/anti-tamper because these always rely on windows api specific functions. Here’s an example of a populated imports descriptor and how it would look like when reverse engineering. If we were to check any xref’s to any of these, it would help us understand the pseudocode easier, for example. We can easily infer that v9 is a handle and that the function before it must return some form of handle. This is just a really minimal example.\nLazy Importer I’m not going to go into absolute detail but essentially, the way a lazy importer works is it creates stubs that iterates through the PEB of the local process and finds the specific module, the specific module name will also be hashed with two keys. There’s something which I would call an init key and a multiplier. The encryption used is a form of a rolling XOR. Let’s talk about how this algorithm works.\nRolling XOR A rolling XOR will have two keys, the init key (as i mentioned previously) and the multiplier, the init key is pretty simple, it’s used as the starting value within the algorithm. Here’s the simple transformation.\nmov rcx, character\rmov rax, last_key\rxor rax, rcx\rimul rax, multip_key or…\n(character ^ last_key) * multip_key You might be wondering why there’s a “last_key” and not the init key being used here, it’s called a rolling xor - the result is actually built up off of the previous entry each time.\nTraversing the PEB Now that we’ve talked about the algorithm used for the hashes, we’ll talk about how it typically will start out when it comes to invoking a lazily imported function. It all begins with three simple instructions\nmov rax, gs:60h\rmov rax, [rax+18h]\radd rax, 0x10 or …\nstd::uint64_t peb = __readgsqword(0x60); std::uint64_t ldr = *reinterpret_cast\u003cstd::uint64_t*\u003e(peb + 0x18); std::uint64_t InLoadOrderModuleList_addr = ldr + 0x10; What this is doing is, the first mov will get the PEB. Every process has its own PEB and you can just look at it as some form of descriptor. The second instruction will get the LDR entry from the PEB. The LDR entry essentially contains every loaded module within the process, this is how they’re iterating over each one. After these instructions, there’s some more instructions related to the actual lazy importer but I’ll cover these later on in the section covering a live example, for now we’ll move onto these next instructions;\nmov r9, rax\rmov r9, [r9] or…\nstd::uint64_t entry = *reinterpret_cast\u003cstd::uint64_t*\u003e(InLoadOrderModuleList_addr); We directly dereference the address to get a doubly linked list of loaded modules, we’re going to cast these to _LDR_DATA_TABLE_ENTRY.\nmovzx r10d, word ptr [r9+58h] or…\nstd::uint16_t unicode_name_length = *reinterpret_cast\u003cstd::uint16_t*\u003e(entry + 0x58); Preparing the DLL The entry + 0x58 address will lead to the start of a unicode string for the BaseDllName, by dereferencing it, we actually get the length of the name.\nshr r10d, 1\rmov r11, [r9+60h] or…\n// Get the character length of the unicode string // shift right by 1 is the same as dividing by two unicode_name_length /= 2 std::uint64_t name_bytes = *reinterpret_cast\u003cstd::uint64_t*\u003e(entry + 0x60); What’s happening here is, we’re getting the actual length of the character’s in the string. Unicode strings length are essentially nm_of_characters * 2 since the Length field stores the amt of bytes. The name bytes is exactly as it says, it gets the pointer to the actual bytes of the dll name. Here’s where it starts to get more interesting though.\nmov ebx, r10d\rand ebx, 0FFFFFFFEh or…\nstd::uint32_t pair_len = unicode_name_length - (unicode_name_length % 2); What this is actually doing is, it splits the string into pairs of two. There’s some assembly before this which actually handles if it’s a odd sized string, it essentially still handles all the pairs but has an extra last case for the last character that was left out.\nThe hasher Now, onto the final part of the hashing - the algorithm…\n; First byte\rmovzx r14d, word ptr [r11+rdi*2]\rlea r15d, [r14-41h]\rmov r12d, r14d\ror r12d, 20h\rcmp r15w, 1Ah\rcmovnb r12d, r14d\rmovzx r14d, r12b\rxor r14, rsi\rimul r14, r8\r; Second byte\rmovzx esi, word ptr [r11+rdi*2+2]\rlea r15d, [rsi-41h]\rmov r12d, esi\ror r12d, 20h\rcmp r15w, 1Ah\rcmovnb r12d, esi\rmovzx esi, r12b\rxor rsi, r14\rimul rsi, r8\radd rdi, 2 or…\nstd::uint64_t lazy_deporter::apply_character(std::uint8_t current_char, const std::uint64_t key, const std::uint64_t multip_magic, const bool requires_upper) const { // Ensure lowercase character, do not encrypt as uppercase if it's a module // name if (std::isupper(current_char) \u0026\u0026 requires_upper) current_char = std::tolower(current_char); /* mov reg1, key xor reg1, reg2 imul reg1, multip_magic */ return (current_char ^ key) * multip_magic; } std::expected\u003cstd::uint64_t, std::string\u003e lazy_deporter::get_hash(const char *entry, lazy_keys keys, bool is_mod) const { // Create local copy of current output, at start this is defaulted to the init // magic std::uint64_t encrypted_return = keys.lazy_init_key; // Hyperion splits the input string into streams of two characters, so we'll // do the same here. We need to ensure that we get the last tuple index. const std::size_t len = strlen(entry), tuple_len = strlen(entry) - (strlen(entry) \u0026 1); // Iterate through each pair std::size_t idx = 0; while (idx != tuple_len) { // Encrypt first character encrypted_return = this-\u003eapply_character(entry[idx], encrypted_return, keys.lazy_multip, is_mod); // Encrypt second character encrypted_return = this-\u003eapply_character(entry[idx + 1], encrypted_return, keys.lazy_multip, is_mod); // Move onto next tuple idx += 2; } // Check if odd sized string, if so we need to handle the last char that was // left out if (len \u0026 1) { encrypted_return = this-\u003eapply_character(entry[len - 1], encrypted_return, keys.lazy_multip, is_mod); } // Return encrypted magic to user return encrypted_return; } That’s pretty much it, it essentially applies the rolling xor algorithm to each character in every pair, if it’s a module name it’ll enforce a lowercase input only which you can see happening in the assembly. The function hashing is exactly the same except it doesn’t enforce lowercase.\nFunctions As said before, functions are basically identical except they’re retrieved from the export table of the module. I’ll save you the boring details but, after it matches the hash it will get the export directory of the dll. Once it does this, it’ll iterate through all the exported functions of the module, once it matches the function hash to an export, and directly invoke the function from the base + rva to the function found through the export table. This happens differently within Hyperion, hyperion will actually obfuscate the function address and deobfuscate it immediately after and invoke it. The obfuscation is built up off of some trivial byte transformation on EVERY byte within the address - it uses some sort of rng value in the transformation.\nmov rax, [rbp+940h+var_C0]\rinc al\rand al, 3\rmovzx esi, al\rmovzx r15d, byte ptr [rbp+940h+var_138]\rxor r15b, r8b\rnot r15b\rrol r15b, 1\rmov r12d, r8d\rshr r12d, 8\rxor r12b, byte ptr [rbp+940h+var_140]\rnot r12b\rrol r12b, 1\rlea r9, unk_7FF820F0E4B4\rmov [r9+rsi*8+1Ch], r15b\rmov [r9+rsi*8+1Dh], r12b\rmov r13d, r8d\rshr r13d, 10h\rxor r13b, byte ptr [rbp+940h+var_198]\rnot r13b\rrol r13b, 1\rmov [r9+rsi*8+1Eh], r13b\rmov eax, r8d\rshr eax, 18h\rxor al, byte ptr [rbp+940h+var_1B0]\rnot al\rrol al, 1\rmov [r9+rsi*8+1Fh], al\rmov r14, r8\rshr r14, 20h\rmovzx ebx, byte ptr [rbp+940h+var_6E8]\rxor r14b, bl\rnot r14b\rrol r14b, 1\rmov rcx, r8\rshr rcx, 28h\rmovzx r11d, byte ptr [rbp+940h+var_B8]\rxor cl, r11b\rnot cl\rrol cl, 1\rmov [r9+rsi*8+20h], r14b\rmov [r9+rsi*8+21h], cl\rmov rdx, r8\rshr rdx, 30h\rmovzx edi, byte ptr [rbp+940h+var_80]\rxor dl, dil\rnot dl\rrol dl, 1\rmov [r9+rsi*8+22h], dl\rshr r8, 38h\rmovzx r10d, byte ptr [rbp+940h+var_88]\rxor r8b, r10b\rnot r8b\rrol r8b, 1\rmov [r9+rsi*8+23h], r8b\rmov cs:byte_7FF820F0E4C0, sil\rnot r15b\rror r15b, 1\rxor r15b, byte ptr [rbp+940h+var_138]\rnot r12b\rror r12b, 1\rxor r12b, byte ptr [rbp+940h+var_140]\rnot r13b\rror r13b, 1\rxor r13b, byte ptr [rbp+940h+var_198]\rnot al\rror al, 1\rxor al, byte ptr [rbp+940h+var_1B0]\rnot r14b\rror r14b, 1\rxor r14b, bl\rnot cl\rror cl, 1\rxor cl, r11b\rnot dl\rror dl, 1\rxor dl, dil\rnot r8b\rror r8b, 1\rxor r8b, r10b or…\nstd::uint64_t obfuscate_address(std::uint64_t func_addr, std::uint8_t *xor_bytes, std::uint8_t *rng_table) { std::uint8_t current_index = (rng_table[0xC] + 1) \u0026 3; std::uint8_t obfuscated_bytes[8]; for (int idx = 0; idx \u003c 8; idx++) { std::uint8_t byte = (reinterpret_cast\u003cstd::uint8_t *\u003e(\u0026func_addr))[idx]; byte ^= xor_bytes[idx]; byte = ~byte; byte = (byte \u003c\u003c 1) | (byte \u003e\u003e 7); obfuscated_bytes[idx] = byte; rng_table[current_index * 8 + 0x1c + idx] = byte; } rng_table[0xC] = current_index; std::uint64_t deobfuscated = 0; for (int idx = 0; idx \u003c 8; idx++) { std::uint8_t byte = obfuscated_bytes[idx]; byte = ~byte; byte = (byte \u003e\u003e 1) | (byte \u003c\u003c 7); byte ^= xor_bytes[idx]; (reinterpret_cast\u003cstd::uint8_t *\u003e(\u0026deobfuscated))[idx] = byte; } return deobfuscated; } This is, of course, directly invoked immediately after.\nHyperion Lazy Import overview Everything we’ve currently discussed so far applies to hyperion, the only major difference is that they actually setup multiple different key sets, typically only one key set is used within a lazy importer but they’ve gone out of there way to add multiple - each set is different and are used to, most likely, mask all functions so that even if you find one, it won’t match the other.\nConclusion I hope this helped you understand how a Lazy Importer is used and how we can reverse engineer it - Hyperion’s implementation is a really good public use case of this because it utilises multiple different keys as we talked about, they also obfuscate any return too. You can find a public repo dumping all of the lazily imported functions (If any are missing, it’s most likely that the pattern isn’t capturing all references but the core logic should be fine).\nGithub Repo\n",
+  "wordCount" : "1784",
+  "inLanguage": "en",
+  "datePublished": "2025-03-26T14:16:21+01:00",
+  "dateModified": "2025-03-26T14:16:21+01:00",
+  "author":{
+    "@type": "Person",
+    "name": "dx9"
+  },
+  "mainEntityOfPage": {
+    "@type": "WebPage",
+    "@id": "https://dx9.uk/posts/lazy-importer/"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "dx9",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://dx9.uk/favicon.ico"
+    }
+  }
+}
+</script>
+</head>
+
+<body class="" id="top">
+<script>
+    if (localStorage.getItem("pref-theme") === "dark") {
+        document.body.classList.add('dark');
+    } else if (localStorage.getItem("pref-theme") === "light") {
+        document.body.classList.remove('dark')
+    } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.body.classList.add('dark');
+    }
+
+</script>
+
+<header class="header">
+    <nav class="nav">
+        <div class="logo">
+            <a href="https://dx9.uk/" accesskey="h" title="dx9 (Alt + H)">dx9</a>
+            <div class="logo-switches">
+                <button id="theme-toggle" accesskey="t" title="(Alt + T)">
+                    <svg id="moon" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                    <svg id="sun" xmlns="http://www.w3.org/2000/svg" width="24" height="18" viewBox="0 0 24 24"
+                        fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <ul id="menu">
+        </ul>
+    </nav>
+</header>
+<main class="main">
+
+<article class="post-single">
+  <header class="post-header">
+    
+    <h1 class="post-title entry-hint-parent">
+      Lazy Importer
+    </h1>
+    <div class="post-meta"><span title='2025-03-26 14:16:21 +0100 +0100'>March 26, 2025</span>&nbsp;·&nbsp;9 min&nbsp;·&nbsp;1784 words&nbsp;·&nbsp;dx9
+
+</div>
+  </header> <div class="toc">
+    <details  open>
+        <summary accesskey="c" title="(Alt + C)">
+            <span class="details">Table of Contents</span>
+        </summary>
+
+        <div class="inner"><nav id="TableOfContents">
+  <ul>
+    <li><a href="#introduction">Introduction</a></li>
+    <li><a href="#background-information">Background information</a></li>
+    <li><a href="#lazy-importer">Lazy Importer</a>
+      <ul>
+        <li><a href="#rolling-xor">Rolling XOR</a></li>
+        <li><a href="#traversing-the-peb">Traversing the PEB</a></li>
+        <li><a href="#preparing-the-dll">Preparing the DLL</a></li>
+        <li><a href="#the-hasher">The hasher</a></li>
+        <li><a href="#functions">Functions</a></li>
+      </ul>
+    </li>
+    <li><a href="#hyperion-lazy-import-overview">Hyperion Lazy Import overview</a></li>
+    <li><a href="#conclusion">Conclusion</a></li>
+  </ul>
+</nav>
+        </div>
+    </details>
+</div>
+
+  <div class="post-content"><h2 id="introduction">Introduction<a hidden class="anchor" aria-hidden="true" href="#introduction">#</a></h2>
+<p>Hello, today we&rsquo;ll be looking at how we can reverse engineer a lazy importer with a real life example. I&rsquo;ll be using Roblox&rsquo;s Hyperion as a base to reverse engineer as their implementation is a little bit different to how they&rsquo;re normally implemented.</p>
+<h2 id="background-information">Background information<a hidden class="anchor" aria-hidden="true" href="#background-information">#</a></h2>
+<p>To begin, we&rsquo;ll need to know what a lazy importer really is and what its use case is. A lazy importer will essentially create small stubs of code that will find a specific function that you&rsquo;re looking to call and allow you to invoke it while also masking it from the import descriptor. When you have access to the import table of a binary file, it makes life easier to reverse engineer that file because we&rsquo;d be able to directly see all xrefs (cross references) and understand exactly what&rsquo;s going on in a good handful of places - this is very helpful when working against some form of anti-cheat/anti-tamper because these always rely on windows api specific functions. Here&rsquo;s an example of a populated imports descriptor and how it would look like when reverse engineering.
+<a href="/img/kQPsKcCYr4TvwQI4RlSurYEVXIZ.png"><img loading="lazy" src="/img/kQPsKcCYr4TvwQI4RlSurYEVXIZ.png" alt="image|581x500, 75%"  />
+</a>
+If we were to check any xref&rsquo;s to any of these, it would help us understand the pseudocode easier, for example.
+<a href="/img/rrMsj1Y8dfWMDnbm3QRcW5OWZVV.png"><img loading="lazy" src="/img/rrMsj1Y8dfWMDnbm3QRcW5OWZVV.png" alt="image|581x500, 75%"  />
+</a>
+We can easily infer that v9 is a handle and that the function before it must return some form of handle. This is just a really minimal example.</p>
+<h2 id="lazy-importer">Lazy Importer<a hidden class="anchor" aria-hidden="true" href="#lazy-importer">#</a></h2>
+<p>I&rsquo;m not going to go into absolute detail but essentially, the way a lazy importer works is it creates stubs that iterates through the PEB of the local process and finds the specific module, the specific module name will also be hashed with two keys. There&rsquo;s something which I would call an init key and a multiplier. The encryption used is a form of a rolling XOR. Let&rsquo;s talk about how this algorithm works.</p>
+<h3 id="rolling-xor">Rolling XOR<a hidden class="anchor" aria-hidden="true" href="#rolling-xor">#</a></h3>
+<p>A rolling XOR will have two keys, the init key (as i mentioned previously) and the multiplier, the init key is pretty simple, it&rsquo;s used as the starting value within the algorithm. Here&rsquo;s the simple transformation.</p>
+<pre tabindex="0"><code class="language-x86asm" data-lang="x86asm">mov rcx, character
+mov rax, last_key
+xor rax, rcx
+imul rax, multip_key
+</code></pre><p>or&hellip;</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>(character <span style="color:#f92672">^</span> last_key) <span style="color:#f92672">*</span> multip_key
+</span></span></code></pre></div><p>You might be wondering why there&rsquo;s a &ldquo;last_key&rdquo; and not the init key being used here, it&rsquo;s called a rolling xor - the result is actually built up off of the previous entry each time.</p>
+<h3 id="traversing-the-peb">Traversing the PEB<a hidden class="anchor" aria-hidden="true" href="#traversing-the-peb">#</a></h3>
+<p>Now that we&rsquo;ve talked about the algorithm used for the hashes, we&rsquo;ll talk about how it typically will start out when it comes to invoking a lazily imported function. It all begins with three simple instructions</p>
+<pre tabindex="0"><code class="language-x86asm" data-lang="x86asm">mov rax, gs:60h
+mov rax, [rax+18h]
+add rax, 0x10
+</code></pre><p>or &hellip;</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> peb <span style="color:#f92672">=</span> __readgsqword(<span style="color:#ae81ff">0x60</span>);
+</span></span><span style="display:flex;"><span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> ldr <span style="color:#f92672">=</span> <span style="color:#f92672">*</span><span style="color:#66d9ef">reinterpret_cast</span><span style="color:#f92672">&lt;</span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span><span style="color:#f92672">*&gt;</span>(peb <span style="color:#f92672">+</span> <span style="color:#ae81ff">0x18</span>);
+</span></span><span style="display:flex;"><span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> InLoadOrderModuleList_addr <span style="color:#f92672">=</span> ldr <span style="color:#f92672">+</span> <span style="color:#ae81ff">0x10</span>;
+</span></span></code></pre></div><p>What this is doing is, the first mov will get the PEB. Every process has its own PEB and you can just look at it as some form of descriptor. The second instruction will get the LDR entry from the PEB. The LDR entry essentially contains every loaded module within the process, this is how they&rsquo;re iterating over each one. After these instructions, there&rsquo;s some more instructions related to the actual lazy importer but I&rsquo;ll cover these later on in the section covering a live example, for now we&rsquo;ll move onto these next instructions;</p>
+<pre tabindex="0"><code class="language-x86asm" data-lang="x86asm">mov r9, rax
+mov r9, [r9]
+</code></pre><p>or&hellip;</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> entry <span style="color:#f92672">=</span> <span style="color:#f92672">*</span><span style="color:#66d9ef">reinterpret_cast</span><span style="color:#f92672">&lt;</span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span><span style="color:#f92672">*&gt;</span>(InLoadOrderModuleList_addr);
+</span></span></code></pre></div><p>We directly dereference the address to get a doubly linked list of loaded modules, we&rsquo;re going to cast these to _LDR_DATA_TABLE_ENTRY.</p>
+<pre tabindex="0"><code class="language-x86asm" data-lang="x86asm">movzx   r10d, word ptr [r9+58h]
+</code></pre><p>or&hellip;</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint16_t</span> unicode_name_length <span style="color:#f92672">=</span> <span style="color:#f92672">*</span><span style="color:#66d9ef">reinterpret_cast</span><span style="color:#f92672">&lt;</span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint16_t</span><span style="color:#f92672">*&gt;</span>(entry <span style="color:#f92672">+</span> <span style="color:#ae81ff">0x58</span>);
+</span></span></code></pre></div><h3 id="preparing-the-dll">Preparing the DLL<a hidden class="anchor" aria-hidden="true" href="#preparing-the-dll">#</a></h3>
+<p>The entry + 0x58 address will lead to the start of a unicode string for the BaseDllName, by dereferencing it, we actually get the length of the name.</p>
+<pre tabindex="0"><code class="language-x86asm" data-lang="x86asm">shr     r10d, 1
+mov     r11, [r9+60h]
+</code></pre><p>or&hellip;</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#75715e">// Get the character length of the unicode string
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">// shift right by 1 is the same as dividing by two
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>unicode_name_length <span style="color:#f92672">/=</span> <span style="color:#ae81ff">2</span>
+</span></span><span style="display:flex;"><span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> name_bytes <span style="color:#f92672">=</span> <span style="color:#f92672">*</span><span style="color:#66d9ef">reinterpret_cast</span><span style="color:#f92672">&lt;</span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span><span style="color:#f92672">*&gt;</span>(entry <span style="color:#f92672">+</span> <span style="color:#ae81ff">0x60</span>);
+</span></span></code></pre></div><p>What&rsquo;s happening here is, we&rsquo;re getting the actual length of the character&rsquo;s in the string. Unicode strings length are essentially nm_of_characters * 2 since the Length field stores the amt of bytes. The name bytes is exactly as it says, it gets the pointer to the actual bytes of the dll name. Here&rsquo;s where it starts to get more interesting though.</p>
+<pre tabindex="0"><code class="language-x86asm" data-lang="x86asm">mov     ebx, r10d
+and     ebx, 0FFFFFFFEh
+</code></pre><p>or&hellip;</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint32_t</span> pair_len <span style="color:#f92672">=</span> unicode_name_length <span style="color:#f92672">-</span> (unicode_name_length <span style="color:#f92672">%</span> <span style="color:#ae81ff">2</span>);
+</span></span></code></pre></div><p>What this is actually doing is, it splits the string into pairs of two. There&rsquo;s some assembly before this which actually handles if it&rsquo;s a odd sized string, it essentially still handles all the pairs but has an extra last case for the last character that was left out.</p>
+<h3 id="the-hasher">The hasher<a hidden class="anchor" aria-hidden="true" href="#the-hasher">#</a></h3>
+<p>Now, onto the final part of the hashing - the algorithm&hellip;</p>
+<pre tabindex="0"><code class="language-x86asm" data-lang="x86asm">; First byte
+movzx   r14d, word ptr [r11+rdi*2]
+lea     r15d, [r14-41h]
+mov     r12d, r14d
+or      r12d, 20h
+cmp     r15w, 1Ah
+cmovnb  r12d, r14d
+movzx   r14d, r12b
+xor     r14, rsi
+imul    r14, r8
+
+; Second byte
+movzx   esi, word ptr [r11+rdi*2+2]
+lea     r15d, [rsi-41h]
+mov     r12d, esi
+or      r12d, 20h
+cmp     r15w, 1Ah
+cmovnb  r12d, esi
+movzx   esi, r12b
+xor     rsi, r14
+imul    rsi, r8
+
+add     rdi, 2
+</code></pre><p>or&hellip;</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> lazy_deporter<span style="color:#f92672">::</span>apply_character(std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint8_t</span> current_char,
+</span></span><span style="display:flex;"><span>                                             <span style="color:#66d9ef">const</span> std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> key,
+</span></span><span style="display:flex;"><span>                                             <span style="color:#66d9ef">const</span> std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> multip_magic,
+</span></span><span style="display:flex;"><span>                                             <span style="color:#66d9ef">const</span> <span style="color:#66d9ef">bool</span> requires_upper) <span style="color:#66d9ef">const</span> {
+</span></span><span style="display:flex;"><span>  <span style="color:#75715e">// Ensure lowercase character, do not encrypt as uppercase if it&#39;s a module
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>  <span style="color:#75715e">// name
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>  <span style="color:#66d9ef">if</span> (std<span style="color:#f92672">::</span>isupper(current_char) <span style="color:#f92672">&amp;&amp;</span> requires_upper)
+</span></span><span style="display:flex;"><span>    current_char <span style="color:#f92672">=</span> std<span style="color:#f92672">::</span>tolower(current_char);
+</span></span><span style="display:flex;"><span>  <span style="color:#75715e">/*
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">  mov reg1, key
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">  xor reg1, reg2
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">  imul reg1, multip_magic
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e">  */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#66d9ef">return</span> (current_char <span style="color:#f92672">^</span> key) <span style="color:#f92672">*</span> multip_magic;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>std<span style="color:#f92672">::</span>expected<span style="color:#f92672">&lt;</span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span>, std<span style="color:#f92672">::</span>string<span style="color:#f92672">&gt;</span>
+</span></span><span style="display:flex;"><span>lazy_deporter<span style="color:#f92672">::</span>get_hash(<span style="color:#66d9ef">const</span> <span style="color:#66d9ef">char</span> <span style="color:#f92672">*</span>entry, lazy_keys keys, <span style="color:#66d9ef">bool</span> is_mod) <span style="color:#66d9ef">const</span> {
+</span></span><span style="display:flex;"><span>  <span style="color:#75715e">// Create local copy of current output, at start this is defaulted to the init
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>  <span style="color:#75715e">// magic
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>  std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> encrypted_return <span style="color:#f92672">=</span> keys.lazy_init_key;
+</span></span><span style="display:flex;"><span>  <span style="color:#75715e">// Hyperion splits the input string into streams of two characters, so we&#39;ll
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>  <span style="color:#75715e">// do the same here. We need to ensure that we get the last tuple index.
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>  <span style="color:#66d9ef">const</span> std<span style="color:#f92672">::</span>size_t len <span style="color:#f92672">=</span> strlen(entry),
+</span></span><span style="display:flex;"><span>                    tuple_len <span style="color:#f92672">=</span> strlen(entry) <span style="color:#f92672">-</span> (strlen(entry) <span style="color:#f92672">&amp;</span> <span style="color:#ae81ff">1</span>);
+</span></span><span style="display:flex;"><span>  <span style="color:#75715e">// Iterate through each pair
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>  std<span style="color:#f92672">::</span>size_t idx <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>  <span style="color:#66d9ef">while</span> (idx <span style="color:#f92672">!=</span> tuple_len) {
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">// Encrypt first character
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>    encrypted_return <span style="color:#f92672">=</span> <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>apply_character(entry[idx], encrypted_return,
+</span></span><span style="display:flex;"><span>                                             keys.lazy_multip, is_mod);
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">// Encrypt second character
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>    encrypted_return <span style="color:#f92672">=</span> <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>apply_character(entry[idx <span style="color:#f92672">+</span> <span style="color:#ae81ff">1</span>], encrypted_return,
+</span></span><span style="display:flex;"><span>                                             keys.lazy_multip, is_mod);
+</span></span><span style="display:flex;"><span>    <span style="color:#75715e">// Move onto next tuple
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>    idx <span style="color:#f92672">+=</span> <span style="color:#ae81ff">2</span>;
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#75715e">// Check if odd sized string, if so we need to handle the last char that was
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>  <span style="color:#75715e">// left out
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>  <span style="color:#66d9ef">if</span> (len <span style="color:#f92672">&amp;</span> <span style="color:#ae81ff">1</span>) {
+</span></span><span style="display:flex;"><span>    encrypted_return <span style="color:#f92672">=</span> <span style="color:#66d9ef">this</span><span style="color:#f92672">-&gt;</span>apply_character(entry[len <span style="color:#f92672">-</span> <span style="color:#ae81ff">1</span>], encrypted_return,
+</span></span><span style="display:flex;"><span>                                             keys.lazy_multip, is_mod);
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#75715e">// Return encrypted magic to user
+</span></span></span><span style="display:flex;"><span><span style="color:#75715e"></span>  <span style="color:#66d9ef">return</span> encrypted_return;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>That&rsquo;s pretty much it, it essentially applies the rolling xor algorithm to each character in every pair, if it&rsquo;s a module name it&rsquo;ll enforce a lowercase input only which you can see happening in the assembly. The function hashing is exactly the same except it doesn&rsquo;t enforce lowercase.</p>
+<h3 id="functions">Functions<a hidden class="anchor" aria-hidden="true" href="#functions">#</a></h3>
+<p>As said before, functions are basically identical except they&rsquo;re retrieved from the export table of the module. I&rsquo;ll save you the boring details but, after it matches the hash it will get the export directory of the dll. Once it does this, it&rsquo;ll iterate through all the exported functions of the module, once it matches the function hash to an export, and directly invoke the function from the base + rva to the function found through the export table. This happens differently within Hyperion, hyperion will actually obfuscate the function address and deobfuscate it immediately after and invoke it. The obfuscation is built up off of some trivial byte transformation on EVERY byte within the address - it uses some sort of rng value in the transformation.</p>
+<pre tabindex="0"><code class="language-x86asm" data-lang="x86asm">mov     rax, [rbp+940h+var_C0]
+inc     al
+and     al, 3
+movzx   esi, al
+movzx   r15d, byte ptr [rbp+940h+var_138]
+xor     r15b, r8b
+not     r15b
+rol     r15b, 1
+mov     r12d, r8d
+shr     r12d, 8
+xor     r12b, byte ptr [rbp+940h+var_140]
+not     r12b
+rol     r12b, 1
+lea     r9, unk_7FF820F0E4B4
+mov     [r9+rsi*8+1Ch], r15b
+mov     [r9+rsi*8+1Dh], r12b
+mov     r13d, r8d
+shr     r13d, 10h
+xor     r13b, byte ptr [rbp+940h+var_198]
+not     r13b
+rol     r13b, 1
+mov     [r9+rsi*8+1Eh], r13b
+mov     eax, r8d
+shr     eax, 18h
+xor     al, byte ptr [rbp+940h+var_1B0]
+not     al
+rol     al, 1
+mov     [r9+rsi*8+1Fh], al
+mov     r14, r8
+shr     r14, 20h
+movzx   ebx, byte ptr [rbp+940h+var_6E8]
+xor     r14b, bl
+not     r14b
+rol     r14b, 1
+mov     rcx, r8
+shr     rcx, 28h
+movzx   r11d, byte ptr [rbp+940h+var_B8]
+xor     cl, r11b
+not     cl
+rol     cl, 1
+mov     [r9+rsi*8+20h], r14b
+mov     [r9+rsi*8+21h], cl
+mov     rdx, r8
+shr     rdx, 30h
+movzx   edi, byte ptr [rbp+940h+var_80]
+xor     dl, dil
+not     dl
+rol     dl, 1
+mov     [r9+rsi*8+22h], dl
+shr     r8, 38h
+movzx   r10d, byte ptr [rbp+940h+var_88]
+xor     r8b, r10b
+not     r8b
+rol     r8b, 1
+mov     [r9+rsi*8+23h], r8b
+mov     cs:byte_7FF820F0E4C0, sil
+not     r15b
+ror     r15b, 1
+xor     r15b, byte ptr [rbp+940h+var_138]
+not     r12b
+ror     r12b, 1
+xor     r12b, byte ptr [rbp+940h+var_140]
+not     r13b
+ror     r13b, 1
+xor     r13b, byte ptr [rbp+940h+var_198]
+not     al
+ror     al, 1
+xor     al, byte ptr [rbp+940h+var_1B0]
+not     r14b
+ror     r14b, 1
+xor     r14b, bl
+not     cl
+ror     cl, 1
+xor     cl, r11b
+not     dl
+ror     dl, 1
+xor     dl, dil
+not     r8b
+ror     r8b, 1
+xor     r8b, r10b
+</code></pre><p>or&hellip;</p>
+<div class="highlight"><pre tabindex="0" style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> obfuscate_address(std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> func_addr,
+</span></span><span style="display:flex;"><span>                                std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint8_t</span> <span style="color:#f92672">*</span>xor_bytes,
+</span></span><span style="display:flex;"><span>                                std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint8_t</span> <span style="color:#f92672">*</span>rng_table) {
+</span></span><span style="display:flex;"><span>  std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint8_t</span> current_index <span style="color:#f92672">=</span> (rng_table[<span style="color:#ae81ff">0xC</span>] <span style="color:#f92672">+</span> <span style="color:#ae81ff">1</span>) <span style="color:#f92672">&amp;</span> <span style="color:#ae81ff">3</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint8_t</span> obfuscated_bytes[<span style="color:#ae81ff">8</span>];
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#66d9ef">for</span> (<span style="color:#66d9ef">int</span> idx <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; idx <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">8</span>; idx<span style="color:#f92672">++</span>) {
+</span></span><span style="display:flex;"><span>    std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint8_t</span> byte <span style="color:#f92672">=</span> (<span style="color:#66d9ef">reinterpret_cast</span><span style="color:#f92672">&lt;</span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint8_t</span> <span style="color:#f92672">*&gt;</span>(<span style="color:#f92672">&amp;</span>func_addr))[idx];
+</span></span><span style="display:flex;"><span>    byte <span style="color:#f92672">^=</span> xor_bytes[idx];
+</span></span><span style="display:flex;"><span>    byte <span style="color:#f92672">=</span> <span style="color:#f92672">~</span>byte;
+</span></span><span style="display:flex;"><span>    byte <span style="color:#f92672">=</span> (byte <span style="color:#f92672">&lt;&lt;</span> <span style="color:#ae81ff">1</span>) <span style="color:#f92672">|</span> (byte <span style="color:#f92672">&gt;&gt;</span> <span style="color:#ae81ff">7</span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    obfuscated_bytes[idx] <span style="color:#f92672">=</span> byte;
+</span></span><span style="display:flex;"><span>    rng_table[current_index <span style="color:#f92672">*</span> <span style="color:#ae81ff">8</span> <span style="color:#f92672">+</span> <span style="color:#ae81ff">0x1c</span> <span style="color:#f92672">+</span> idx] <span style="color:#f92672">=</span> byte;
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  rng_table[<span style="color:#ae81ff">0xC</span>] <span style="color:#f92672">=</span> current_index;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint64_t</span> deobfuscated <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>;
+</span></span><span style="display:flex;"><span>  <span style="color:#66d9ef">for</span> (<span style="color:#66d9ef">int</span> idx <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>; idx <span style="color:#f92672">&lt;</span> <span style="color:#ae81ff">8</span>; idx<span style="color:#f92672">++</span>) {
+</span></span><span style="display:flex;"><span>    std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint8_t</span> byte <span style="color:#f92672">=</span> obfuscated_bytes[idx];
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    byte <span style="color:#f92672">=</span> <span style="color:#f92672">~</span>byte;
+</span></span><span style="display:flex;"><span>    byte <span style="color:#f92672">=</span> (byte <span style="color:#f92672">&gt;&gt;</span> <span style="color:#ae81ff">1</span>) <span style="color:#f92672">|</span> (byte <span style="color:#f92672">&lt;&lt;</span> <span style="color:#ae81ff">7</span>);
+</span></span><span style="display:flex;"><span>    byte <span style="color:#f92672">^=</span> xor_bytes[idx];
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    (<span style="color:#66d9ef">reinterpret_cast</span><span style="color:#f92672">&lt;</span>std<span style="color:#f92672">::</span><span style="color:#66d9ef">uint8_t</span> <span style="color:#f92672">*&gt;</span>(<span style="color:#f92672">&amp;</span>deobfuscated))[idx] <span style="color:#f92672">=</span> byte;
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>  <span style="color:#66d9ef">return</span> deobfuscated;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></div><p>This is, of course, directly invoked immediately after.</p>
+<h2 id="hyperion-lazy-import-overview">Hyperion Lazy Import overview<a hidden class="anchor" aria-hidden="true" href="#hyperion-lazy-import-overview">#</a></h2>
+<p>Everything we&rsquo;ve currently discussed so far applies to hyperion, the only major difference is that they actually setup multiple different key sets, typically only one key set is used within a lazy importer but they&rsquo;ve gone out of there way to add multiple - each set is different and are used to, most likely, mask all functions so that even if you find one, it won&rsquo;t match the other.</p>
+<h2 id="conclusion">Conclusion<a hidden class="anchor" aria-hidden="true" href="#conclusion">#</a></h2>
+<p>I hope this helped you understand how a Lazy Importer is used and how we can reverse engineer it - Hyperion&rsquo;s implementation is a really good public use case of this because it utilises multiple different keys as we talked about, they also obfuscate any return too. You can find a public repo dumping all of the lazily imported functions (If any are missing, it&rsquo;s most likely that the pattern isn&rsquo;t capturing all references but the core logic should be fine).</p>
+<p><a href="https://github.com/godfearingman/lazy_deporter">Github Repo</a></p>
+
+
+  </div>
+
+  <footer class="post-footer">
+    <ul class="post-tags">
+    </ul>
+  </footer>
+</article>
+    </main>
+    
+<footer class="footer">
+        <span>&copy; 2025 <a href="https://dx9.uk/">dx9</a></span> · 
+
+    <span>
+        Powered by
+        <a href="https://gohugo.io/" rel="noopener noreferrer" target="_blank">Hugo</a> &
+        <a href="https://github.com/adityatelange/hugo-PaperMod/" rel="noopener" target="_blank">PaperMod</a>
+    </span>
+</footer>
+<a href="#top" aria-label="go to top" title="Go to Top (Alt + G)" class="top-link" id="top-link" accesskey="g">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 6" fill="currentColor">
+        <path d="M12 6H0l6-6z" />
+    </svg>
+</a>
+
+<script>
+    let menu = document.getElementById('menu')
+    if (menu) {
+        menu.scrollLeft = localStorage.getItem("menu-scroll-position");
+        menu.onscroll = function () {
+            localStorage.setItem("menu-scroll-position", menu.scrollLeft);
+        }
+    }
+
+    document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+        anchor.addEventListener("click", function (e) {
+            e.preventDefault();
+            var id = this.getAttribute("href").substr(1);
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView({
+                    behavior: "smooth"
+                });
+            } else {
+                document.querySelector(`[id='${decodeURIComponent(id)}']`).scrollIntoView();
+            }
+            if (id === "top") {
+                history.replaceState(null, null, " ");
+            } else {
+                history.pushState(null, null, `#${id}`);
+            }
+        });
+    });
+
+</script>
+<script>
+    var mybutton = document.getElementById("top-link");
+    window.onscroll = function () {
+        if (document.body.scrollTop > 800 || document.documentElement.scrollTop > 800) {
+            mybutton.style.visibility = "visible";
+            mybutton.style.opacity = "1";
+        } else {
+            mybutton.style.visibility = "hidden";
+            mybutton.style.opacity = "0";
+        }
+    };
+
+</script>
+<script>
+    document.getElementById("theme-toggle").addEventListener("click", () => {
+        if (document.body.className.includes("dark")) {
+            document.body.classList.remove('dark');
+            localStorage.setItem("pref-theme", 'light');
+        } else {
+            document.body.classList.add('dark');
+            localStorage.setItem("pref-theme", 'dark');
+        }
+    })
+
+</script>
+</body>
+
+</html>
